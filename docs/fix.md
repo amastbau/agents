@@ -70,6 +70,8 @@ See [Customizing with AGENTS.md](https://fullsend.sh/docs/guides/user/customizin
 | Variable | Default | Effect |
 |----------|---------|--------|
 | `FULLSEND_FORGE` | `github` | Selects the forge platform (`github` or `gitlab`). Set automatically by the harness `forge` block. |
+| `FULLSEND_RUN_HEAD_SHA` | (set by the runner) | The PR/MR head SHA the run was dispatched for. The agent compares it against the current head in its end-of-run re-check. Set by the runner — not declared in the harness. |
+| `FULLSEND_RUN_STARTED_AT` | (set by the runner) | RFC 3339 UTC instant the agent iteration started, used by the end-of-run re-check to select comments newer than the run. Set by the runner — not declared in the harness. |
 
 ### Skill: `fix-review`
 
@@ -82,7 +84,7 @@ To cover a CI system other than GitHub Actions or GitLab CI, add a skill in `.ag
 The fix agent follows a similar pipeline to the [code agent](code.md), with an additional validation step:
 
 1. **Pre-script** validates inputs and checks the iteration cap (preventing infinite fix loops).
-2. **Sandbox** — the agent reads each review finding, inspects project CI, implements targeted fixes, and verifies them against tests and linters.
+2. **Sandbox** — the agent reads each review finding, inspects project CI, implements targeted fixes, verifies them against tests and linters, and re-checks once for a moved head or comments newer than `FULLSEND_RUN_STARTED_AT` (fullsend's own excluded) before committing.
 3. **Validation loop** — the output is checked against a schema, with up to 2 retry iterations if the output is malformed.
 4. **Post-script** pushes the commit and posts a summary comment on the PR.
 
