@@ -933,10 +933,10 @@ and an auth bypass on the same line are two distinct findings.
 #### 6d. Challenger pass (dedicated sub-agent)
 
 After steps 6a–6c, withhold findings below
-`$REVIEW_FINDING_SEVERITY_THRESHOLD` (order: `info < low < medium <
+`REVIEW_FINDING_SEVERITY_THRESHOLD` (order: `info < low < medium <
 high < critical`; default `low`) and re-append them unchallenged after
-step 3. If none remain, skip the challenger: keep the 6a–6c set,
-record `no findings to challenge`, continue to 6e (no
+step 3. If none remain, skip the challenger: keep the 6a–6c set, log
+`no findings to challenge` (do not add a finding), continue to 6e (no
 sub-agent-failure finding). Otherwise dispatch `challenger` on the
 remaining set with fresh context — it has not seen the synthesis; it
 gets those findings and the diff.
