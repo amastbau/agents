@@ -172,9 +172,9 @@ Agent definitions (`agents/*.md`) are resolved at dispatch time from
 `fullsend-ai/agents@main` (or the CLI's release tag), not from the PR
 branch being acted on. Per-repo dispatch uses `--fullsend-dir .fullsend`.
 That config's agent entries have no `source:`, so fullsend falls back
-to the published agents repo at `heads/main`. Relative harness
-resources fetched with that definition (skills, scripts, policies)
-use the same pin.
+to the published agents repo at `heads/main`. Harness resources
+referenced from that definition (skills, scripts, policies) are not
+pinned the same way — they are fetched from the PR's actual head SHA.
 
 A PR that modifies `agents/fix.md` or `agents/review.md` therefore does
 not change the governing prompt for fix/review runs on itself until
