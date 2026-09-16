@@ -7,10 +7,24 @@ It never uses the durable stage mint.
 
 The suite is build-tagged and imports fullsend's live runner. The CI workflow
 prepares a temporary module file that points at the exact fullsend checkout
-before running it. With that same setup, a credential-free compile is:
+before running it. Because the shared package still exposes internal test-only
+module edges to Go's dependency loader, local checks should use the same
+temporary modfile setup:
 
 ```bash
-go test -tags behaviour -run '^$' -exec ./scripts/run-behaviour-test-exec.sh ./behaviour
+fullsend_checkout=/path/to/fullsend
+modfile="$(mktemp --suffix=.mod)"
+sumfile="${modfile%.mod}.sum"
+cp go.mod "$modfile"
+: > "$sumfile"
+go mod edit -modfile="$modfile" \
+  -replace="github.com/fullsend-ai/fullsend=${fullsend_checkout}"
+go mod edit -modfile="$modfile" \
+  -replace="github.com/fullsend-ai/fullsend/internal/mintcore=${fullsend_checkout}/internal/mintcore"
+go mod tidy -modfile="$modfile"
+FULLSEND_CHECKOUT="$fullsend_checkout" \
+  go test -mod=readonly -modfile="$modfile" -tags behaviour -run '^$' \
+  -exec "$PWD/scripts/run-behaviour-test-exec.sh" ./behaviour
 ```
 
 The live command is:
@@ -22,6 +36,14 @@ make behaviour-test
 When `FULLSEND_CHECKOUT` is set, the test process runs from that checked-out
 fullsend source tree. This is required for vendoring when the suite is run from
 the agents module.
+
+The CI workflow generates a temporary config preset and passes it as
+`BEHAVIOUR_CONFIG_PRESET`. Fullsend installs that document as
+`.fullsend/config.base.yaml`, then composes the normal per-repository overlay.
+Each agent source is pinned to the selected GitHub merge revision with a
+SHA-256 URL fragment, and the preset allow-lists that source repository. For
+fork pull requests the synthetic merge revision is preferred; if GitHub has
+not produced one, the PR head repository and revision are used.
 
 ## CI credentials
 

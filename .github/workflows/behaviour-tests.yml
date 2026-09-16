@@ -35,8 +35,10 @@ concurrency:
         && format('behaviour-{0}', github.event.pull_request.number)
         || format('{0}-{1}', github.workflow, github.ref) }}
   cancel-in-progress: >-
-    ${{ github.event_name == 'pull_request_target'
-        || github.ref != 'refs/heads/main' }}
+    ${{ (github.event_name == 'pull_request_target'
+        && github.event.action != 'labeled')
+        || (github.event_name != 'pull_request_target'
+        && github.ref != 'refs/heads/main') }}
 
 jobs:
   gate:
@@ -70,6 +72,7 @@ jobs:
     needs: gate
     if: >-
       !cancelled() &&
+      github.repository_owner == 'fullsend-ai' &&
       (
         (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
         github.event_name == 'merge_group' ||
@@ -89,26 +92,85 @@ jobs:
       BEHAVIOUR_CI: githubactions
       BEHAVIOUR_INSTALL_MODE: per-repo
       BEHAVIOUR_APP_SET: fullsend-test
-      BEHAVIOUR_SUITE_NAME: agents-bt-${{ github.run_id }}
+      BEHAVIOUR_SUITE_NAME: agents-bt
     steps:
+      - name: Check for behaviour-relevant changes
+        id: changes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          MERGE_GROUP_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          case "$EVENT_NAME" in
+            pull_request_target)
+              if ! files="$(gh api --paginate \
+                "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files?per_page=100" \
+                --jq '.[].filename')"; then
+                echo '::warning::could not inspect pull request files; running behaviour tests'
+                echo 'relevant=true' >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              ;;
+            merge_group)
+              if ! files="$(gh api \
+                "repos/${REPOSITORY}/compare/${MERGE_GROUP_BASE_SHA}...${MERGE_GROUP_HEAD_SHA}" \
+                --jq '.files[].filename')"; then
+                echo '::warning::could not inspect merge-group files; running behaviour tests'
+                echo 'relevant=true' >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              ;;
+            *)
+              exit 0
+              ;;
+          esac
+
+          file_count="$(printf '%s\n' "$files" | sed '/^$/d' | wc -l)"
+          if (( file_count >= 300 )); then
+            echo '::warning::change list is truncated or large; running behaviour tests'
+            echo 'relevant=true' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          relevant=false
+          while IFS= read -r path; do
+            case "$path" in
+              agents/*|behaviour/*|config.yaml|env/*|harness/*|policies/*|schemas/*|scripts/*|go.mod|go.sum|Makefile|.fullsend/*|.github/workflows/behaviour-tests.yml|.github/actions/check-e2e-authorization/*|.github/scripts/check-e2e-authorization.sh)
+                relevant=true
+                break
+                ;;
+            esac
+          done <<< "$files"
+          echo "relevant=${relevant}" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        if: steps.changes.outputs.relevant != 'false'
         with:
           ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
           allow-unsafe-pr-checkout: ${{ github.event_name == 'pull_request_target' }}
 
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        if: steps.changes.outputs.relevant != 'false'
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
       - name: Authenticate to GCP
+        if: steps.changes.outputs.relevant != 'false'
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ secrets.AGENTS_BT_E2E_GCP_WIF_PROVIDER }}
           service_account: ${{ secrets.AGENTS_BT_E2E_GCP_SERVICE_ACCOUNT }}
 
       - name: Resolve pinned fullsend source
+        if: steps.changes.outputs.relevant != 'false'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -145,7 +207,116 @@ jobs:
           } >> "$GITHUB_ENV"
           echo "Using fullsend source ${sha} for ${version}"
 
+      - name: Prepare behaviour config preset
+        if: steps.changes.outputs.relevant != 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REPOSITORY: ${{ github.repository }}
+          PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          MERGE_GROUP_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+          WORKFLOW_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          valid_repo() {
+            [[ "$1" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+          }
+          valid_sha() {
+            [[ "$1" =~ ^[0-9a-fA-F]{40}$ ]]
+          }
+
+          source_repository="$BASE_REPOSITORY"
+          source_ref="$WORKFLOW_SHA"
+          case "$EVENT_NAME" in
+            pull_request_target)
+              # GitHub's synthetic merge commit is preferred because it is the
+              # same source revision normally used for PR validation. It lives
+              # in the base repository, including for fork pull requests.
+              if valid_sha "$PR_MERGE_SHA" && [[ "$PR_MERGE_SHA" != "0000000000000000000000000000000000000000" ]]; then
+                source_ref="$PR_MERGE_SHA"
+              else
+                source_repository="$PR_HEAD_REPOSITORY"
+                source_ref="$PR_HEAD_SHA"
+              fi
+              ;;
+            merge_group)
+              source_ref="$MERGE_GROUP_HEAD_SHA"
+              ;;
+          esac
+
+          valid_repo "$source_repository" || {
+            echo "invalid agent source repository: ${source_repository}" >&2
+            exit 1
+          }
+          valid_sha "$source_ref" || {
+            echo "invalid agent source revision: ${source_ref}" >&2
+            exit 1
+          }
+
+          fetch_harnesses() {
+            local repository="$1"
+            local ref="$2"
+            local name file
+            for name in code fix prioritize retro review triage; do
+              file="${RUNNER_TEMP}/behaviour-${name}.yaml"
+              if ! gh api \
+                "repos/${repository}/contents/harness/${name}.yaml?ref=${ref}" \
+                --jq .content | tr -d '\n' | base64 -d > "$file"; then
+                return 1
+              fi
+            done
+          }
+
+          if ! fetch_harnesses "$source_repository" "$source_ref"; then
+            if [[ "$EVENT_NAME" == 'pull_request_target' ]] && \
+              valid_repo "$PR_HEAD_REPOSITORY" && valid_sha "$PR_HEAD_SHA"; then
+              echo '::notice::synthetic merge ref unavailable; using pull request head for agent sources'
+              source_repository="$PR_HEAD_REPOSITORY"
+              source_ref="$PR_HEAD_SHA"
+              fetch_harnesses "$source_repository" "$source_ref" || {
+                echo "could not fetch agent harnesses from ${source_repository}@${source_ref}" >&2
+                exit 1
+              }
+            else
+              echo "could not fetch agent harnesses from ${source_repository}@${source_ref}" >&2
+              exit 1
+            fi
+          fi
+
+          preset="${RUNNER_TEMP}/agents-behaviour-config.base.yaml"
+          source_prefix="https://raw.githubusercontent.com/${source_repository}/"
+          printf '%s\n' \
+            'version: "1"' \
+            'runtime: dummy' \
+            'roles:' \
+            '  - fullsend' \
+            '  - triage' \
+            '  - coder' \
+            '  - review' \
+            '  - retro' \
+            '  - prioritize' \
+            'agents:' > "$preset"
+
+          for name in code fix prioritize retro review triage; do
+            file="${RUNNER_TEMP}/behaviour-${name}.yaml"
+            hash="$(sha256sum "$file" | awk '{print $1}')"
+            printf '  - name: %s\n    source: %s%s/harness/%s.yaml#sha256=%s\n' \
+              "$name" "$source_prefix" "$source_ref" "$name" "$hash" >> "$preset"
+          done
+
+          {
+            echo 'allowed_remote_resources:'
+            printf '  - %s\n' "$source_prefix"
+          } >> "$preset"
+          echo "BEHAVIOUR_CONFIG_PRESET=${preset}" >> "$GITHUB_ENV"
+          echo "Using agents from ${source_repository}@${source_ref}"
+
       - name: Run behaviour tests
+        if: steps.changes.outputs.relevant != 'false'
         env:
           E2E_GCP_WIF_PROVIDER: ${{ secrets.AGENTS_BT_E2E_GCP_WIF_PROVIDER }}
           E2E_GCP_SERVICE_ACCOUNT: ${{ secrets.AGENTS_BT_E2E_GCP_SERVICE_ACCOUNT }}
@@ -158,6 +329,8 @@ jobs:
           TEST_PRIORITIZE_PEM: ${{ secrets.AGENTS_BT_PRIORITIZE_PEM }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.AGENTS_BT_CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.AGENTS_BT_CLOUDFLARE_API_TOKEN }}
+          # Actor credentials are passed through for future scenarios; the
+          # current shared framework does not consume them (fullsend#6027).
           TEST_ACTOR_WRITE_PAT: ${{ secrets.AGENTS_BT_ACTOR_WRITE_PAT }}
           TEST_ACTOR_TRIAGE_PAT: ${{ secrets.AGENTS_BT_ACTOR_TRIAGE_PAT }}
           TEST_ACTOR_OUTSIDER_PAT: ${{ secrets.AGENTS_BT_ACTOR_OUTSIDER_PAT }}
@@ -167,8 +340,7 @@ jobs:
             E2E_GCP_WIF_PROVIDER E2E_GCP_SERVICE_ACCOUNT E2E_GCP_PROJECT_ID
             TEST_FULLSEND_PEM TEST_TRIAGE_PEM TEST_CODER_PEM TEST_REVIEW_PEM
             TEST_RETRO_PEM TEST_PRIORITIZE_PEM CLOUDFLARE_ACCOUNT_ID
-            CLOUDFLARE_API_TOKEN TEST_ACTOR_WRITE_PAT TEST_ACTOR_TRIAGE_PAT
-            TEST_ACTOR_OUTSIDER_PAT
+            CLOUDFLARE_API_TOKEN
           )
           for name in "${required[@]}"; do
             if [[ -z "${!name:-}" ]]; then
