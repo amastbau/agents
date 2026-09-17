@@ -52,13 +52,6 @@
       "severity": "error"
     },
     {
-      "fingerprint": "45a0577d6723aa54",
-      "rule_id": "content-contradiction",
-      "file_path": "skills/pr-review/SKILL.md",
-      "message": "Possible contradiction: 'minimal' vs 'exhaustive'",
-      "severity": "warning"
-    },
-    {
       "fingerprint": "8aba1d160bb4c413",
       "rule_id": "context-budget",
       "file_path": "skills/code-implementation/SKILL.md",

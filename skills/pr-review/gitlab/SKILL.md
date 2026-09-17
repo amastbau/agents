@@ -21,11 +21,13 @@ REPO=$(echo "${PR_URL}" | sed -E 's|^https://[^/]+/(.+)/-/merge_requests/[0-9]+$
 REPO_ENCODED=$(printf '%s' "${REPO}" | jq -sRr @uri)
 MR_IID=$(basename "${PR_URL}")
 
-# Write token into a curl config file so the header never appears
-# on a command line (avoids the tirith sensitive-upload rule).
-CURL_CFG=$(mktemp)
-(umask 077; printf 'header = "PRIVATE-TOKEN: %s"\n' "${GITLAB_TOKEN}" > "${CURL_CFG}")
-trap 'rm -f "${CURL_CFG}"' EXIT
+# Write token into a stable curl config file so the header never
+# appears on a command line (avoids the tirith sensitive-upload rule).
+# Use a hardcoded path, not a mktemp path stored in a shell variable:
+# each fenced block in this file runs as an independent Bash call, so
+# shell variables do not survive between them — files (at a fixed,
+# predictable path) do.
+(umask 077; printf 'header = "PRIVATE-TOKEN: %s"\n' "${GITLAB_TOKEN}" > /tmp/gitlab-api.curlrc)
 ```
 
 ## MR data fetching
@@ -33,7 +35,7 @@ trap 'rm -f "${CURL_CFG}"' EXIT
 ```bash
 # MR metadata: title, description, author, labels, draft status, head SHA
 MR_DATA=$(curl --fail --silent --show-error \
-  -K "${CURL_CFG}" \
+  -K /tmp/gitlab-api.curlrc \
   "https://${GITLAB_HOST}/api/v4/projects/${REPO_ENCODED}/merge_requests/${MR_IID}")
 HEAD_SHA=$(echo "$MR_DATA" | jq -r '.sha')
 IS_DRAFT=$(echo "$MR_DATA" | jq -r '.draft')
@@ -41,7 +43,7 @@ IS_DRAFT=$(echo "$MR_DATA" | jq -r '.draft')
 # MR changes (includes diff per file), saved for later Bash calls
 # (shell variables do not survive between calls; files do)
 curl --fail --silent --show-error \
-  -K "${CURL_CFG}" \
+  -K /tmp/gitlab-api.curlrc \
   "https://${GITLAB_HOST}/api/v4/projects/${REPO_ENCODED}/merge_requests/${MR_IID}/changes" \
   > /sandbox/workspace/mr-changes.json
 
@@ -107,13 +109,13 @@ timed out — scrub the token: `: > /tmp/pr-head.curlrc`.
 ```bash
 # Fetch linked issue metadata
 curl --fail --silent --show-error \
-  -K "${CURL_CFG}" \
+  -K /tmp/gitlab-api.curlrc \
   "https://${GITLAB_HOST}/api/v4/projects/${REPO_ENCODED}/issues/<issue-iid>" \
   | jq '{title, description}'
 
 # Fetch issue notes (comments)
 curl --fail --silent --show-error \
-  -K "${CURL_CFG}" \
+  -K /tmp/gitlab-api.curlrc \
   "https://${GITLAB_HOST}/api/v4/projects/${REPO_ENCODED}/issues/<issue-iid>/notes"
 ```
 
@@ -122,10 +124,17 @@ curl --fail --silent --show-error \
 ```bash
 # Compare commits between prior review and current HEAD
 COMPARE=$(curl --fail --silent --show-error \
-  -K "${CURL_CFG}" \
+  -K /tmp/gitlab-api.curlrc \
   "https://${GITLAB_HOST}/api/v4/projects/${REPO_ENCODED}/repository/compare?from=${PRIOR_REVIEW_SHA}&to=${HEAD_SHA}")
 CHANGED_FILES=$(echo "$COMPARE" | jq -r '.diffs[].new_path')
 ```
+
+Then, once every GitLab API call in this skill is done for the review
+(metadata, changes, issue context, prior-review compare), scrub the
+token as its own explicit Bash call: `: > /tmp/gitlab-api.curlrc` —
+not `rm`, and not an `EXIT` trap (a trap set in one Bash call does not
+fire for commands run in a later, independent call, and would instead
+delete the file before the later consumers ever read it).
 
 ## Notes
 

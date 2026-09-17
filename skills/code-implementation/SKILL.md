@@ -328,7 +328,7 @@ if test -z "${DEFAULT_BRANCH}"; then
   DEFAULT_BRANCH="$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null \
     | sed 's|^origin/||')" || true
 fi
-if test -z "${DEFAULT_BRANCH}" || test   "${DEFAULT_BRANCH}" = "HEAD"; then
+if test -z "${DEFAULT_BRANCH}" || test "${DEFAULT_BRANCH}" = "HEAD"; then
   DEFAULT_BRANCH="$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null \
     | sed 's|^refs/remotes/origin/||')" || true
 fi
