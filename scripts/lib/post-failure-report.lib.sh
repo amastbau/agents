@@ -11,6 +11,9 @@
 [[ -n "${POST_FAILURE_REPORT_SH_LOADED:-}" ]] && return 0
 POST_FAILURE_REPORT_SH_LOADED=1
 
+# shellcheck source=forge-transient-retry.lib.sh
+source "${BASH_SOURCE[0]%/*}/forge-transient-retry.lib.sh"
+
 POST_FAILURE_CATEGORY="${POST_FAILURE_CATEGORY:-}"
 POST_FAILURE_DETAIL="${POST_FAILURE_DETAIL:-}"
 # Guard against duplicate posts within one script invocation (e.g. trap + explicit
@@ -304,6 +307,53 @@ _post_failure_ensure_token() {
   fi
 }
 
+# Last-resort discoverability when even the retried failure comment fails.
+# A label survives when every comment attempt is swallowed by a forge outage.
+_post_failure_apply_failed_label() {
+  local label="$1"
+  local target="${2:-issue}"
+  local number description
+
+  if [ "${target}" = "pr" ]; then
+    number="${PR_NUMBER:-}"
+    description="Fix agent post-script failed"
+  else
+    number="${ISSUE_NUMBER:-}"
+    description="Code agent post-script failed"
+  fi
+
+  if [ -z "${number}" ] || [ -z "${REPO_FULL_NAME:-}" ]; then
+    gha_echo warning "Cannot apply last-resort ${label} label (missing issue/PR number or repo)"
+    return 0
+  fi
+
+  gha_echo warning "Applying last-resort ${label} label so the failure is discoverable"
+
+  if declare -F forge_create_label >/dev/null 2>&1; then
+    forge_create_label "${label}" "${description}" "B60205"
+  fi
+
+  if declare -F forge_add_label >/dev/null 2>&1; then
+    forge_add_label "${label}" "${target}" "${number}"
+    return 0
+  fi
+
+  if [ "${FULLSEND_FORGE:-}" = "gitlab" ]; then
+    gha_echo warning "Failed to apply last-resort ${label} label (GitLab helpers unavailable)"
+    return 0
+  fi
+
+  gh label create "${label}" --repo "${REPO_FULL_NAME}" \
+    --description "${description}" --color "B60205" --force || true
+  if [ "${target}" = "pr" ]; then
+    gh pr edit "${number}" --repo "${REPO_FULL_NAME}" --add-label "${label}" || \
+      gha_echo warning "Failed to apply last-resort ${label} label to PR #${number}"
+  else
+    gh issue edit "${number}" --repo "${REPO_FULL_NAME}" --add-label "${label}" || \
+      gha_echo warning "Failed to apply last-resort ${label} label to issue #${number}"
+  fi
+}
+
 report_post_failure_to_issue() {
   local exit_code="${1:-$?}"
   local safe_issue_number
@@ -336,14 +386,16 @@ report_post_failure_to_issue() {
 
   gha_echo warning "Posting failure comment to issue #${safe_issue_number}..."
   if declare -F forge_post_issue_comment >/dev/null 2>&1; then
-    if ! forge_post_issue_comment "${body}"; then
+    if ! forge_retry_transient forge_post_issue_comment "${body}"; then
       gha_echo warning "Failed to post error comment to issue #${safe_issue_number}"
+      _post_failure_apply_failed_label "code-agent-failed" "issue"
     fi
   else
-    if ! gh issue comment "${ISSUE_NUMBER}" \
+    if ! forge_retry_transient gh issue comment "${ISSUE_NUMBER}" \
       --repo "${REPO_FULL_NAME}" \
-      --body "${body}" 2>/dev/null; then
-      gha_echo warning "Failed to post error comment to issue #${safe_issue_number} (check issues:write on PUSH_TOKEN)"
+      --body "${body}"; then
+      gha_echo warning "Failed to post error comment to issue #${safe_issue_number}"
+      _post_failure_apply_failed_label "code-agent-failed" "issue"
     fi
   fi
 }
@@ -371,14 +423,16 @@ report_post_failure_to_pr() {
 
   gha_echo warning "Posting failure comment to PR #${safe_pr_number}..."
   if declare -F forge_post_pr_comment >/dev/null 2>&1; then
-    if ! forge_post_pr_comment "${PR_NUMBER}" "${body}"; then
+    if ! forge_retry_transient forge_post_pr_comment "${PR_NUMBER}" "${body}"; then
       gha_echo warning "Failed to post error comment to PR #${safe_pr_number}"
+      _post_failure_apply_failed_label "fix-agent-failed" "pr"
     fi
   else
-    if ! gh pr comment "${PR_NUMBER}" \
+    if ! forge_retry_transient gh pr comment "${PR_NUMBER}" \
       --repo "${REPO_FULL_NAME}" \
-      --body "${body}" 2>/dev/null; then
-      gha_echo warning "Failed to post error comment to PR #${safe_pr_number} (check pull-requests:write on PUSH_TOKEN)"
+      --body "${body}"; then
+      gha_echo warning "Failed to post error comment to PR #${safe_pr_number}"
+      _post_failure_apply_failed_label "fix-agent-failed" "pr"
     fi
   fi
 }

@@ -430,6 +430,265 @@ unset PUSH_TOKEN REPO_FULL_NAME ISSUE_NUMBER
 
 rm -rf "$(dirname "${MOCK_BIN}")"
 
+# ---------------------------------------------------------------------------
+# Transient retry + last-resort label (issue #1361)
+# ---------------------------------------------------------------------------
+
+run_transient_detector_test() {
+  local test_name="$1"
+  local sample="$2"
+  local expect_transient="$3"
+
+  if forge_is_transient_error "${sample}"; then
+    if [ "${expect_transient}" = "yes" ]; then
+      echo "PASS: ${test_name}"
+    else
+      echo "FAIL: ${test_name}"
+      echo "  treated as transient: ${sample}"
+      FAILURES=$((FAILURES + 1))
+    fi
+  else
+    if [ "${expect_transient}" = "no" ]; then
+      echo "PASS: ${test_name}"
+    else
+      echo "FAIL: ${test_name}"
+      echo "  not treated as transient: ${sample}"
+      FAILURES=$((FAILURES + 1))
+    fi
+  fi
+}
+
+run_transient_detector_test "transient-http-503" \
+  "HTTP 503: Server Error" "yes"
+run_transient_detector_test "transient-internal-server-error" \
+  "GraphQL: Internal Server Error" "yes"
+run_transient_detector_test "transient-deadline-exceeded" \
+  "Post \"https://api.github.com/graphql\": context deadline exceeded" "yes"
+run_transient_detector_test "transient-curl-503" \
+  "curl: (22) The requested URL returned error: 503" "yes"
+run_transient_detector_test "non-transient-422" \
+  "HTTP 422: Validation Failed" "no"
+run_transient_detector_test "non-transient-403-permission" \
+  "HTTP 403: Resource not accessible by integration" "no"
+
+run_comment_retry_test() {
+  # shellcheck disable=SC2030,SC2031,SC2317
+  local test_name="$1"
+  local fail_times="$2"
+  local error_msg="$3"
+  local expect_attempts="$4"
+  local expect_label="${5:-no}"
+
+  local tmp mock_bin call_log rc=0 output attempts
+  tmp=$(mktemp -d)
+  mock_bin="${tmp}/bin"
+  call_log="${tmp}/calls"
+  mkdir -p "${mock_bin}"
+  : > "${call_log}"
+
+  cat > "${mock_bin}/gh" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${CALL_LOG}"
+n=$(grep -c 'issue comment' "${CALL_LOG}" 2>/dev/null || true)
+if printf '%s' " $*" | grep -q ' issue comment '; then
+  if [ "${n}" -le "${FAIL_TIMES}" ]; then
+    echo "${ERROR_MSG}" >&2
+    exit 1
+  fi
+  echo "https://github.com/my-org/my-repo/issues/42#issuecomment-1"
+  exit 0
+fi
+exit 0
+MOCK
+  chmod +x "${mock_bin}/gh"
+
+  output=$(
+    # shellcheck disable=SC2030,SC2031,SC2317
+    {
+      sleep() { :; }
+      export PUSH_TOKEN="ghp_test"
+      export GH_TOKEN=""
+      export REPO_FULL_NAME="my-org/my-repo"
+      export ISSUE_NUMBER="42"
+      export GITHUB_RUN_ID="99"
+      export FORGE_TRANSIENT_RETRY_BASE_DELAY=0
+      export CALL_LOG="${call_log}"
+      export FAIL_TIMES="${fail_times}"
+      export ERROR_MSG="${error_msg}"
+      # shellcheck disable=SC2034
+      POST_FAILURE_REPORTED=false
+      set_post_failure "pr-creation-failed" "create failed"
+      PATH="${mock_bin}:${PATH}" report_post_failure_to_issue 1
+    } 2>&1
+  ) || rc=$?
+
+  attempts=$(grep -c 'issue comment' "${call_log}" || true)
+
+  if [ "${rc}" -ne 0 ]; then
+    echo "FAIL: ${test_name}"
+    echo "  report_post_failure_to_issue exited ${rc}"
+    echo "  output: ${output}"
+    FAILURES=$((FAILURES + 1))
+    rm -rf "${tmp}"
+    return
+  fi
+  if [ "${attempts}" -ne "${expect_attempts}" ]; then
+    echo "FAIL: ${test_name}"
+    echo "  expected ${expect_attempts} gh issue comment attempts, got ${attempts}"
+    echo "  calls:"
+    cat "${call_log}"
+    echo "  output: ${output}"
+    FAILURES=$((FAILURES + 1))
+    rm -rf "${tmp}"
+    return
+  fi
+  if [ "${expect_label}" = "yes" ]; then
+    if ! echo "${output}" | grep -q 'Failed to post error comment'; then
+      echo "FAIL: ${test_name}"
+      echo "  expected comment-post failure warning"
+      echo "  output: ${output}"
+      FAILURES=$((FAILURES + 1))
+      rm -rf "${tmp}"
+      return
+    fi
+    if ! grep -q 'code-agent-failed' "${call_log}"; then
+      echo "FAIL: ${test_name}"
+      echo "  expected last-resort code-agent-failed label apply"
+      echo "  calls:"
+      cat "${call_log}"
+      echo "  output: ${output}"
+      FAILURES=$((FAILURES + 1))
+      rm -rf "${tmp}"
+      return
+    fi
+    if ! echo "${output}" | grep -qF "${error_msg}"; then
+      echo "FAIL: ${test_name}"
+      echo "  expected real gh stderr to be logged, not swallowed"
+      echo "  output: ${output}"
+      FAILURES=$((FAILURES + 1))
+      rm -rf "${tmp}"
+      return
+    fi
+  else
+    if echo "${output}" | grep -q 'Failed to post error comment'; then
+      echo "FAIL: ${test_name}"
+      echo "  expected comment post to succeed, but failure warning was emitted"
+      echo "  output: ${output}"
+      FAILURES=$((FAILURES + 1))
+      rm -rf "${tmp}"
+      return
+    fi
+    if grep -q 'code-agent-failed' "${call_log}"; then
+      echo "FAIL: ${test_name}"
+      echo "  last-resort label applied even though comment succeeded"
+      FAILURES=$((FAILURES + 1))
+      rm -rf "${tmp}"
+      return
+    fi
+  fi
+
+  echo "PASS: ${test_name}"
+  rm -rf "${tmp}"
+}
+
+# 503 twice then success — 3 attempts, no last-resort label
+run_comment_retry_test "failure-comment-retries-transient-503" \
+  2 "HTTP 503: Internal Server Error" 3 no
+
+# 503 every time — 3 attempts then last-resort label, stderr preserved
+run_comment_retry_test "failure-comment-gives-up-after-3" \
+  99 "HTTP 503: Internal Server Error" 3 yes
+
+# Non-transient 422 — single attempt, then last-resort label
+run_comment_retry_test "failure-comment-no-retry-on-422" \
+  99 "HTTP 422: Validation Failed" 1 yes
+
+run_pr_comment_retry_test() {
+  # shellcheck disable=SC2030,SC2031,SC2317
+  local test_name="$1"
+  local fail_times="$2"
+  local error_msg="$3"
+  local expect_attempts="$4"
+
+  local tmp mock_bin call_log rc=0 output attempts
+  tmp=$(mktemp -d)
+  mock_bin="${tmp}/bin"
+  call_log="${tmp}/calls"
+  mkdir -p "${mock_bin}"
+  : > "${call_log}"
+
+  cat > "${mock_bin}/gh" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${CALL_LOG}"
+n=$(grep -c 'pr comment' "${CALL_LOG}" 2>/dev/null || true)
+if printf '%s' " $*" | grep -q ' pr comment '; then
+  if [ "${n}" -le "${FAIL_TIMES}" ]; then
+    echo "${ERROR_MSG}" >&2
+    exit 1
+  fi
+  echo "https://github.com/my-org/my-repo/pull/7#issuecomment-1"
+  exit 0
+fi
+exit 0
+MOCK
+  chmod +x "${mock_bin}/gh"
+
+  output=$(
+    # shellcheck disable=SC2030,SC2031,SC2317
+    {
+      sleep() { :; }
+      export PUSH_TOKEN="ghp_test"
+      export GH_TOKEN=""
+      export REPO_FULL_NAME="my-org/my-repo"
+      export PR_NUMBER="7"
+      export GITHUB_RUN_ID="99"
+      export FORGE_TRANSIENT_RETRY_BASE_DELAY=0
+      export CALL_LOG="${call_log}"
+      export FAIL_TIMES="${fail_times}"
+      export ERROR_MSG="${error_msg}"
+      # shellcheck disable=SC2034
+      POST_FAILURE_REPORTED=false
+      set_post_failure "push-rejected" "push failed"
+      PATH="${mock_bin}:${PATH}" report_post_failure_to_pr 1
+    } 2>&1
+  ) || rc=$?
+
+  attempts=$(grep -c 'pr comment' "${call_log}" || true)
+
+  if [ "${rc}" -ne 0 ]; then
+    echo "FAIL: ${test_name}"
+    echo "  report_post_failure_to_pr exited ${rc}"
+    echo "  output: ${output}"
+    FAILURES=$((FAILURES + 1))
+    rm -rf "${tmp}"
+    return
+  fi
+  if [ "${attempts}" -ne "${expect_attempts}" ]; then
+    echo "FAIL: ${test_name}"
+    echo "  expected ${expect_attempts} gh pr comment attempts, got ${attempts}"
+    echo "  calls:"
+    cat "${call_log}"
+    FAILURES=$((FAILURES + 1))
+    rm -rf "${tmp}"
+    return
+  fi
+  if ! grep -q 'fix-agent-failed' "${call_log}"; then
+    echo "FAIL: ${test_name}"
+    echo "  expected last-resort fix-agent-failed label apply"
+    echo "  calls:"
+    cat "${call_log}"
+    FAILURES=$((FAILURES + 1))
+    rm -rf "${tmp}"
+    return
+  fi
+
+  echo "PASS: ${test_name}"
+  rm -rf "${tmp}"
+}
+
+run_pr_comment_retry_test "fix-failure-comment-retries-transient-503" \
+  99 "HTTP 503: Internal Server Error" 3
+
 echo ""
 if [ ${FAILURES} -gt 0 ]; then
   echo "${FAILURES} test(s) failed"

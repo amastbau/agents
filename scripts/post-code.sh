@@ -68,6 +68,101 @@ SCRIPT_DIR_POST="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [[ -n "${POST_FAILURE_REPORT_SH_LOADED:-}" ]] && return 0
 POST_FAILURE_REPORT_SH_LOADED=1
 
+# shellcheck source=forge-transient-retry.lib.sh
+# BEGIN bundled: lib/forge-transient-retry.lib.sh
+# forge-transient-retry.lib.sh — Retry forge CLI/API calls on 5xx/timeouts.
+#
+# Usage:
+#   forge_retry_transient cmd [args...]
+#
+# On success, prints the command's stdout. On failure, prints the command's
+# combined output to stderr so callers (and workflow logs) can diagnose.
+# Retries only when the output looks like a transient 5xx or timeout.
+#
+# Environment:
+#   FORGE_TRANSIENT_RETRY_ATTEMPTS   — default 3
+#   FORGE_TRANSIENT_RETRY_BASE_DELAY — default 2 (seconds; doubles each retry)
+
+# shellcheck shell=bash
+
+[[ -n "${FORGE_TRANSIENT_RETRY_SH_LOADED:-}" ]] && return 0
+FORGE_TRANSIENT_RETRY_SH_LOADED=1
+
+forge_is_transient_error() {
+  local text="$1"
+  local lower
+  lower=$(printf '%s' "${text}" | tr '[:upper:]' '[:lower:]')
+
+  if echo "${lower}" | grep -qE \
+    'http[[:space:]]*5[0-9][0-9]|status([:]|[[:space:]]+code)[[:space:]]*5[0-9][0-9]|error:[[:space:]]*5[0-9][0-9]|\(http 5[0-9][0-9]\)'; then
+    return 0
+  fi
+  if echo "${lower}" | grep -qE \
+    'internal server error|service unavailable|bad gateway|gateway timeout'; then
+    return 0
+  fi
+  if echo "${lower}" | grep -qE \
+    'context deadline exceeded|connection reset|i/o timeout|operation timed out|timed out|timeout'; then
+    return 0
+  fi
+  return 1
+}
+
+_forge_retry_notice() {
+  local msg="$1"
+  # Always stderr so success stdout (e.g. a PR URL) stays clean.
+  if declare -F gha_echo >/dev/null 2>&1; then
+    gha_echo warning "${msg}" >&2
+  else
+    echo "${msg}" >&2
+  fi
+}
+
+# Run a command, retrying transient 5xx/timeout failures with exponential
+# backoff (2s, 4s, 8s by default). Non-transient failures return immediately.
+forge_retry_transient() {
+  local max_attempts="${FORGE_TRANSIENT_RETRY_ATTEMPTS:-3}"
+  local delay="${FORGE_TRANSIENT_RETRY_BASE_DELAY:-2}"
+  local attempt=1
+  local outfile errfile rc combined
+
+  outfile=$(mktemp)
+  errfile=$(mktemp)
+  # shellcheck disable=SC2064
+  trap "rm -f '${outfile}' '${errfile}'" RETURN
+
+  while [ "${attempt}" -le "${max_attempts}" ]; do
+    : >"${outfile}"
+    : >"${errfile}"
+    rc=0
+    "$@" >"${outfile}" 2>"${errfile}" || rc=$?
+
+    if [ "${rc}" -eq 0 ]; then
+      cat "${outfile}"
+      return 0
+    fi
+
+    combined=$(cat "${outfile}" "${errfile}")
+    if [ "${attempt}" -lt "${max_attempts}" ] && forge_is_transient_error "${combined}"; then
+      _forge_retry_notice \
+        "Transient forge error (attempt ${attempt}/${max_attempts}); retrying in ${delay}s..."
+      sleep "${delay}"
+      delay=$((delay * 2))
+      attempt=$((attempt + 1))
+      continue
+    fi
+
+    printf '%s' "${combined}" >&2
+    if [ -n "${combined}" ]; then
+      printf '\n' >&2
+    fi
+    return "${rc}"
+  done
+
+  return 1
+}
+# END bundled: lib/forge-transient-retry.lib.sh
+
 POST_FAILURE_CATEGORY="${POST_FAILURE_CATEGORY:-}"
 POST_FAILURE_DETAIL="${POST_FAILURE_DETAIL:-}"
 # Guard against duplicate posts within one script invocation (e.g. trap + explicit
@@ -361,6 +456,53 @@ _post_failure_ensure_token() {
   fi
 }
 
+# Last-resort discoverability when even the retried failure comment fails.
+# A label survives when every comment attempt is swallowed by a forge outage.
+_post_failure_apply_failed_label() {
+  local label="$1"
+  local target="${2:-issue}"
+  local number description
+
+  if [ "${target}" = "pr" ]; then
+    number="${PR_NUMBER:-}"
+    description="Fix agent post-script failed"
+  else
+    number="${ISSUE_NUMBER:-}"
+    description="Code agent post-script failed"
+  fi
+
+  if [ -z "${number}" ] || [ -z "${REPO_FULL_NAME:-}" ]; then
+    gha_echo warning "Cannot apply last-resort ${label} label (missing issue/PR number or repo)"
+    return 0
+  fi
+
+  gha_echo warning "Applying last-resort ${label} label so the failure is discoverable"
+
+  if declare -F forge_create_label >/dev/null 2>&1; then
+    forge_create_label "${label}" "${description}" "B60205"
+  fi
+
+  if declare -F forge_add_label >/dev/null 2>&1; then
+    forge_add_label "${label}" "${target}" "${number}"
+    return 0
+  fi
+
+  if [ "${FULLSEND_FORGE:-}" = "gitlab" ]; then
+    gha_echo warning "Failed to apply last-resort ${label} label (GitLab helpers unavailable)"
+    return 0
+  fi
+
+  gh label create "${label}" --repo "${REPO_FULL_NAME}" \
+    --description "${description}" --color "B60205" --force || true
+  if [ "${target}" = "pr" ]; then
+    gh pr edit "${number}" --repo "${REPO_FULL_NAME}" --add-label "${label}" || \
+      gha_echo warning "Failed to apply last-resort ${label} label to PR #${number}"
+  else
+    gh issue edit "${number}" --repo "${REPO_FULL_NAME}" --add-label "${label}" || \
+      gha_echo warning "Failed to apply last-resort ${label} label to issue #${number}"
+  fi
+}
+
 report_post_failure_to_issue() {
   local exit_code="${1:-$?}"
   local safe_issue_number
@@ -393,14 +535,16 @@ report_post_failure_to_issue() {
 
   gha_echo warning "Posting failure comment to issue #${safe_issue_number}..."
   if declare -F forge_post_issue_comment >/dev/null 2>&1; then
-    if ! forge_post_issue_comment "${body}"; then
+    if ! forge_retry_transient forge_post_issue_comment "${body}"; then
       gha_echo warning "Failed to post error comment to issue #${safe_issue_number}"
+      _post_failure_apply_failed_label "code-agent-failed" "issue"
     fi
   else
-    if ! gh issue comment "${ISSUE_NUMBER}" \
+    if ! forge_retry_transient gh issue comment "${ISSUE_NUMBER}" \
       --repo "${REPO_FULL_NAME}" \
-      --body "${body}" 2>/dev/null; then
-      gha_echo warning "Failed to post error comment to issue #${safe_issue_number} (check issues:write on PUSH_TOKEN)"
+      --body "${body}"; then
+      gha_echo warning "Failed to post error comment to issue #${safe_issue_number}"
+      _post_failure_apply_failed_label "code-agent-failed" "issue"
     fi
   fi
 }
@@ -428,14 +572,16 @@ report_post_failure_to_pr() {
 
   gha_echo warning "Posting failure comment to PR #${safe_pr_number}..."
   if declare -F forge_post_pr_comment >/dev/null 2>&1; then
-    if ! forge_post_pr_comment "${PR_NUMBER}" "${body}"; then
+    if ! forge_retry_transient forge_post_pr_comment "${PR_NUMBER}" "${body}"; then
       gha_echo warning "Failed to post error comment to PR #${safe_pr_number}"
+      _post_failure_apply_failed_label "fix-agent-failed" "pr"
     fi
   else
-    if ! gh pr comment "${PR_NUMBER}" \
+    if ! forge_retry_transient gh pr comment "${PR_NUMBER}" \
       --repo "${REPO_FULL_NAME}" \
-      --body "${body}" 2>/dev/null; then
-      gha_echo warning "Failed to post error comment to PR #${safe_pr_number} (check pull-requests:write on PUSH_TOKEN)"
+      --body "${body}"; then
+      gha_echo warning "Failed to post error comment to PR #${safe_pr_number}"
+      _post_failure_apply_failed_label "fix-agent-failed" "pr"
     fi
   fi
 }
@@ -1271,6 +1417,9 @@ case "${FULLSEND_FORGE:-}" in
 [[ -n "${GITHUB_CODE_OPS_SH_LOADED:-}" ]] && return 0
 GITHUB_CODE_OPS_SH_LOADED=1
 
+# shellcheck source=forge-transient-retry.lib.sh
+# (already bundled: lib/forge-transient-retry.lib.sh)
+
 # --- URL handling ---
 
 forge_validate_issue_url() {
@@ -1327,7 +1476,7 @@ forge_create_label() {
 forge_post_issue_comment() {
   local body="$1"
   printf '%s' "${body}" | gh issue comment "${ISSUE_NUMBER}" \
-    --repo "${REPO_FULL_NAME}" --body-file - 2>/dev/null
+    --repo "${REPO_FULL_NAME}" --body-file -
 }
 
 forge_post_pr_comment() {
@@ -1335,7 +1484,7 @@ forge_post_pr_comment() {
   local body="$2"
   gh pr comment "${target_pr}" \
     --repo "${REPO_FULL_NAME}" \
-    --body "${body}" 2>/dev/null
+    --body "${body}"
 }
 
 # --- PR/MR lifecycle ---
@@ -1388,7 +1537,7 @@ forge_create_pr() {
   local head="$2"
   local title="$3"
   local body="$4"
-  gh pr create \
+  forge_retry_transient gh pr create \
     --repo "${REPO_FULL_NAME}" \
     --head "${head}" \
     --base "${base}" \
@@ -1599,6 +1748,8 @@ _validate_gitlab_host() {
   fi
 }
 # END bundled: lib/gitlab-host-validation.lib.sh
+# shellcheck source=forge-transient-retry.lib.sh
+# (already bundled: lib/forge-transient-retry.lib.sh)
 
 if ! declare -F gha_echo >/dev/null 2>&1; then
   gha_echo() { echo "::${1}::${2:-}"; }
@@ -1725,14 +1876,14 @@ forge_create_label() {
 forge_post_issue_comment() {
   local body="$1"
   _gitlab_code_api POST "/projects/${REPO_ENCODED}/issues/${ISSUE_NUMBER}/notes" \
-    --data-urlencode "body=${body}" > /dev/null 2>/dev/null
+    --data-urlencode "body=${body}" > /dev/null
 }
 
 forge_post_pr_comment() {
   local mr_iid="$1"
   local body="$2"
   _gitlab_code_api POST "/projects/${REPO_ENCODED}/merge_requests/${mr_iid}/notes" \
-    --data-urlencode "body=${body}" > /dev/null 2>/dev/null
+    --data-urlencode "body=${body}" > /dev/null
 }
 
 # --- MR lifecycle ---
@@ -1806,7 +1957,7 @@ forge_create_pr() {
   local title="$3"
   local body="$4"
   local response
-  response=$(_gitlab_code_api_with_status POST "/projects/${REPO_ENCODED}/merge_requests" \
+  response=$(forge_retry_transient _gitlab_code_api_with_status POST "/projects/${REPO_ENCODED}/merge_requests" \
     --data-urlencode "source_branch=${head}" \
     --data-urlencode "target_branch=${base}" \
     --data-urlencode "title=${title}" \
