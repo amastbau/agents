@@ -3025,6 +3025,7 @@ run_am_test() {
     # shellcheck disable=SC2317
     sleep() { :; }
 
+    # shellcheck disable=SC2030
     export REPO_ENCODED="test-group%2Ftest-project"
     forge_enable_auto_merge "1" "--squash"
   ) 2>&1
@@ -3209,7 +3210,7 @@ run_workflow_url_test() {
     # shellcheck disable=SC1091
     source "${SCRIPT_DIR}/lib/gitlab-code-ops.lib.sh"
     eval "${env_setup}"
-    # shellcheck disable=SC2031
+    # shellcheck disable=SC2030,SC2031
     export REPO_FULL_NAME="test-group/test-project"
     forge_get_workflow_run_url
   ) 2>&1
