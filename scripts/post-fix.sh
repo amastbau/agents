@@ -522,19 +522,24 @@ _forge_retry_notice() {
   fi
 }
 
-# Sanitize captured command output before it reaches the runner log. Prefer
-# the shared sanitizers from post-failure-report.lib.sh (redacts tokens and
-# strips GHA workflow-command sequences); fall back to a minimal inline strip
-# of "::"/"%0A"/"%0D" sequences when that lib isn't loaded, so callers never
-# get a raw, unsanitized dump of forge output (which may embed
+# Sanitize captured command output before it reaches the runner log. Compose
+# both shared sanitizers from post-failure-report.lib.sh when available:
+# sanitize_failure_detail first (redacts tokens/PEMs; only strips a narrow,
+# line-start "::word::" form intended for comment bodies), then
+# sanitize_gha_log_output (strips any "::"/"%0A"/"%0D" sequence regardless of
+# position or parameters — the blanket sanitizer this codebase uses for log
+# destinations). Relying on sanitize_failure_detail alone would leave
+# parameterized commands (e.g. "::error file=x::") and mid-string commands
+# like "::stop-commands::"/"::add-mask::" intact. Falls back to a minimal
+# inline strip of "::"/"%0A"/"%0D" when neither sanitizer is loaded, so
+# callers never get a raw, unsanitized dump of forge output (which may embed
 # issue/agent-influenced text or truncated API response bodies).
 _forge_retry_sanitize() {
   local text="$1"
   if declare -F sanitize_failure_detail >/dev/null 2>&1; then
     # max_lines=0 disables truncation — this is diagnostic log output, not a
     # length-limited PR comment.
-    sanitize_failure_detail "${text}" 0
-    return 0
+    text="$(sanitize_failure_detail "${text}" 0)"
   fi
   if declare -F sanitize_gha_log_output >/dev/null 2>&1; then
     sanitize_gha_log_output "${text}"
@@ -924,24 +929,18 @@ _post_failure_create_label() {
 }
 
 # Apply the last-resort label directly against the forge API and report the
-# real exit status. Deliberately does not call forge_add_label: that helper
-# is the production path for code-agent (github-code-ops.lib.sh /
-# gitlab-code-ops.lib.sh) and swallows forge errors on the issue path
+# real exit status. Deliberately does not call forge_add_label or
+# forge_add_pr_label: those helpers are the best-effort production paths
+# (github-code-ops.lib.sh / gitlab-code-ops.lib.sh / github-fix-ops.lib.sh /
+# gitlab-fix-ops.lib.sh) and unconditionally swallow forge errors
 # (`2>/dev/null || true`), so a failure during the same outage that already
-# failed the retried comment would go unnoticed. For target=pr, prefer
-# forge_add_pr_label — the helper both github-fix-ops.lib.sh and
-# gitlab-fix-ops.lib.sh actually define (neither fix-ops lib defines
-# forge_add_label at all, so a check on forge_add_label alone would always
-# miss GitLab fix-agent runs).
+# failed the retried comment would go unnoticed no matter how it's wrapped.
+# Always go straight to the direct API calls below, wrapped in
+# forge_retry_transient, so a persistent failure is actually surfaced.
 _post_failure_add_label() {
   local label="$1"
   local target="$2"
   local number="$3"
-
-  if [ "${target}" = "pr" ] && declare -F forge_add_pr_label >/dev/null 2>&1; then
-    forge_retry_transient forge_add_pr_label "${number}" "${label}" >/dev/null
-    return $?
-  fi
 
   if [ "${FULLSEND_FORGE:-}" = "gitlab" ]; then
     if [ -z "${REPO_ENCODED:-}" ]; then

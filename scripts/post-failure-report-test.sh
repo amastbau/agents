@@ -691,20 +691,27 @@ run_pr_comment_retry_test "fix-failure-comment-retries-transient-503" \
 
 # ---------------------------------------------------------------------------
 # forge_retry_transient sanitizes failure output before logging (review on
-# PR #1364: unsanitized combined stdout+stderr could carry workflow-command
-# sequences or tokens into public runner logs).
+# PR #1364, 2nd pass: preferring sanitize_failure_detail alone leaves
+# parameterized workflow commands and mid-string commands like
+# ::stop-commands::/::add-mask:: intact, since sanitize_comment_workflow_
+# commands only strips an exact line-start "::word::" form. Composing it
+# with sanitize_gha_log_output -- which strips any "::" occurrence
+# regardless of position or parameters -- closes that gap. Also uses a
+# token that actually matches the redaction regex ({20,} chars), unlike the
+# previous placeholder literal which never matched.
 # ---------------------------------------------------------------------------
 
 run_retry_sanitizes_output_test() {
   local test_name="$1"
+  local real_token="$2"
 
   local tmp mock_bin rc=0 output
   tmp=$(mktemp -d)
   mock_bin="${tmp}/bin"
   mkdir -p "${mock_bin}"
-  cat > "${mock_bin}/gh" <<'MOCK'
+  cat > "${mock_bin}/gh" <<MOCK
 #!/usr/bin/env bash
-echo "::error::HTTP 500 token=ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaa" >&2
+echo '::error file=x::HTTP 500 token=${real_token} ::stop-commands::deadbeef ::add-mask::secretvalue' >&2
 exit 1
 MOCK
   chmod +x "${mock_bin}/gh"
@@ -725,14 +732,14 @@ MOCK
     rm -rf "${tmp}"
     return
   fi
-  if echo "${output}" | grep -q '::error::'; then
+  if echo "${output}" | grep -q '::'; then
     echo "FAIL: ${test_name}"
-    echo "  workflow-command sequence was not stripped: ${output}"
+    echo "  a workflow-command sequence was not stripped: ${output}"
     FAILURES=$((FAILURES + 1))
     rm -rf "${tmp}"
     return
   fi
-  if echo "${output}" | grep -q 'ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaa'; then
+  if echo "${output}" | grep -qF "${real_token}"; then
     echo "FAIL: ${test_name}"
     echo "  token was not redacted: ${output}"
     FAILURES=$((FAILURES + 1))
@@ -751,64 +758,76 @@ MOCK
   rm -rf "${tmp}"
 }
 
-run_retry_sanitizes_output_test "forge-retry-sanitizes-failure-output"
+run_retry_sanitizes_output_test "forge-retry-sanitizes-failure-output" \
+  "$(printf 'gh%s_%s' 'p' 'abcdefghijklmnopqrstuvwxyz1234')"
+
 
 # ---------------------------------------------------------------------------
-# _post_failure_apply_failed_label dispatch (review on PR #1364: must not
-# reuse the best-effort forge_add_label/forge_create_label helpers, and must
-# actually apply the PR label on GitLab fix-agent runs, where forge_add_label
-# is never declared). Stubs the exact production helpers so the assertion
-# covers the real dispatch path, not just the unused raw-CLI fallback.
+# _post_failure_apply_failed_label dispatch, target=pr (review on PR #1364,
+# 2nd pass): forge_add_pr_label in both github-fix-ops.lib.sh and
+# gitlab-fix-ops.lib.sh unconditionally swallows forge errors
+# (`2>/dev/null || true` / `> /dev/null 2>/dev/null || true`) and always
+# returns 0, so calling it for last-resort apply would silently report
+# success during the exact outage this label exists to catch. These tests
+# source the real fix-ops libs (not stubs) so forge_add_pr_label is declared
+# with its actual swallowing body, then force the underlying gh/curl call to
+# fail persistently with a 5xx and assert the failure still surfaces via
+# "Failed to apply last-resort" rather than being absorbed by
+# forge_add_pr_label's `|| true`.
 # ---------------------------------------------------------------------------
 
-run_apply_label_uses_forge_add_pr_label_test() {
-  # shellcheck disable=SC2030,SC2031,SC2317
+run_apply_label_surfaces_failure_github_test() {
   local test_name="$1"
-  local forge="$2"
 
-  local tmp mock_bin call_log stub_log
+  local tmp mock_bin call_log rc=0 output
   tmp=$(mktemp -d)
   mock_bin="${tmp}/bin"
-  call_log="${tmp}/gh_calls"
-  stub_log="${tmp}/stub_calls"
+  call_log="${tmp}/calls"
   mkdir -p "${mock_bin}"
   : > "${call_log}"
-  : > "${stub_log}"
 
   cat > "${mock_bin}/gh" <<'MOCK'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "${CALL_LOG}"
-exit 0
+echo "HTTP 500: Internal Server Error" >&2
+exit 1
 MOCK
   chmod +x "${mock_bin}/gh"
 
-  # shellcheck disable=SC2030,SC2031,SC2317
-  (
-    forge_add_pr_label() {
-      printf '%s %s\n' "$1" "$2" >> "${STUB_LOG}"
-      return 0
-    }
-    export CALL_LOG="${call_log}"
-    export STUB_LOG="${stub_log}"
-    export FULLSEND_FORGE="${forge}"
-    export REPO_FULL_NAME="my-org/my-repo"
-    export PR_NUMBER="7"
-    export FORGE_TRANSIENT_RETRY_BASE_DELAY=0
-    PATH="${mock_bin}:${PATH}" _post_failure_apply_failed_label "fix-agent-failed" "pr"
-  )
+  output=$(
+    # shellcheck disable=SC2030,SC2031,SC2317
+    {
+      sleep() { :; }
+      # shellcheck disable=SC1091
+      source "${SCRIPT_DIR}/lib/github-fix-ops.lib.sh"
+      export CALL_LOG="${call_log}"
+      export REPO_FULL_NAME="my-org/my-repo"
+      export PR_NUMBER="7"
+      export FORGE_TRANSIENT_RETRY_BASE_DELAY=0
+      PATH="${mock_bin}:${PATH}" _post_failure_apply_failed_label "fix-agent-failed" "pr"
+    } 2>&1
+  ) || rc=$?
 
-  if ! grep -q 'fix-agent-failed' "${stub_log}"; then
+  if [ "${rc}" -eq 0 ]; then
     echo "FAIL: ${test_name}"
-    echo "  expected forge_add_pr_label to be invoked with fix-agent-failed"
-    echo "  stub calls:"
-    cat "${stub_log}"
+    echo "  expected a non-zero exit -- the persistent gh 500 should not be"
+    echo "  absorbed by forge_add_pr_label's swallow-all body"
+    echo "  output: ${output}"
     FAILURES=$((FAILURES + 1))
     rm -rf "${tmp}"
     return
   fi
-  if grep -qE '^pr edit ' "${call_log}"; then
+  if ! echo "${output}" | grep -q 'Failed to apply last-resort'; then
     echo "FAIL: ${test_name}"
-    echo "  fell back to the raw gh pr edit CLI instead of forge_add_pr_label"
+    echo "  expected the apply failure to be surfaced, not swallowed"
+    echo "  output: ${output}"
+    FAILURES=$((FAILURES + 1))
+    rm -rf "${tmp}"
+    return
+  fi
+  if ! grep -qE '^pr edit ' "${call_log}"; then
+    echo "FAIL: ${test_name}"
+    echo "  expected the direct 'gh pr edit' path to be used"
     echo "  calls:"
     cat "${call_log}"
     FAILURES=$((FAILURES + 1))
@@ -820,10 +839,79 @@ MOCK
   rm -rf "${tmp}"
 }
 
-run_apply_label_uses_forge_add_pr_label_test \
-  "apply-label-github-fix-agent-uses-forge-add-pr-label" "github"
-run_apply_label_uses_forge_add_pr_label_test \
-  "apply-label-gitlab-fix-agent-uses-forge-add-pr-label" "gitlab"
+run_apply_label_surfaces_failure_github_test \
+  "apply-label-github-fix-agent-surfaces-persistent-failure"
+
+run_apply_label_surfaces_failure_gitlab_test() {
+  local test_name="$1"
+
+  local tmp mock_bin call_log rc=0 output
+  tmp=$(mktemp -d)
+  mock_bin="${tmp}/bin"
+  call_log="${tmp}/calls"
+  mkdir -p "${mock_bin}"
+  : > "${call_log}"
+
+  cat > "${mock_bin}/curl" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${CALL_LOG}"
+echo "HTTP 500: Internal Server Error" >&2
+exit 1
+MOCK
+  chmod +x "${mock_bin}/curl"
+
+  output=$(
+    # shellcheck disable=SC2030,SC2031,SC2317
+    {
+      sleep() { :; }
+      # shellcheck disable=SC1091
+      source "${SCRIPT_DIR}/lib/gitlab-fix-ops.lib.sh"
+      export CALL_LOG="${call_log}"
+      export FULLSEND_FORGE="gitlab"
+      export REPO_FULL_NAME="group/project"
+      export REPO_ENCODED="group%2Fproject"
+      export GITLAB_HOST="gitlab.example.com"
+      export CI_SERVER_HOST="gitlab.example.com"
+      export GITLAB_TOKEN="test-token"
+      export PR_NUMBER="7"
+      export FORGE_TRANSIENT_RETRY_BASE_DELAY=0
+      PATH="${mock_bin}:${PATH}" _post_failure_apply_failed_label "fix-agent-failed" "pr"
+    } 2>&1
+  ) || rc=$?
+
+  if [ "${rc}" -eq 0 ]; then
+    echo "FAIL: ${test_name}"
+    echo "  expected a non-zero exit -- the persistent curl 500 should not be"
+    echo "  absorbed by forge_add_pr_label's swallow-all body"
+    echo "  output: ${output}"
+    FAILURES=$((FAILURES + 1))
+    rm -rf "${tmp}"
+    return
+  fi
+  if ! echo "${output}" | grep -q 'Failed to apply last-resort'; then
+    echo "FAIL: ${test_name}"
+    echo "  expected the apply failure to be surfaced, not swallowed"
+    echo "  output: ${output}"
+    FAILURES=$((FAILURES + 1))
+    rm -rf "${tmp}"
+    return
+  fi
+  if ! grep -q 'merge_requests/7' "${call_log}"; then
+    echo "FAIL: ${test_name}"
+    echo "  expected the direct _gitlab_api PUT against the MR label endpoint"
+    echo "  calls:"
+    cat "${call_log}"
+    FAILURES=$((FAILURES + 1))
+    rm -rf "${tmp}"
+    return
+  fi
+
+  echo "PASS: ${test_name}"
+  rm -rf "${tmp}"
+}
+
+run_apply_label_surfaces_failure_gitlab_test \
+  "apply-label-gitlab-fix-agent-surfaces-persistent-failure"
 
 run_gitlab_issue_label_direct_api_test() {
   # shellcheck disable=SC2030,SC2031,SC2317

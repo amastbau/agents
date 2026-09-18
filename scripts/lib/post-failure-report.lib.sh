@@ -342,24 +342,18 @@ _post_failure_create_label() {
 }
 
 # Apply the last-resort label directly against the forge API and report the
-# real exit status. Deliberately does not call forge_add_label: that helper
-# is the production path for code-agent (github-code-ops.lib.sh /
-# gitlab-code-ops.lib.sh) and swallows forge errors on the issue path
+# real exit status. Deliberately does not call forge_add_label or
+# forge_add_pr_label: those helpers are the best-effort production paths
+# (github-code-ops.lib.sh / gitlab-code-ops.lib.sh / github-fix-ops.lib.sh /
+# gitlab-fix-ops.lib.sh) and unconditionally swallow forge errors
 # (`2>/dev/null || true`), so a failure during the same outage that already
-# failed the retried comment would go unnoticed. For target=pr, prefer
-# forge_add_pr_label — the helper both github-fix-ops.lib.sh and
-# gitlab-fix-ops.lib.sh actually define (neither fix-ops lib defines
-# forge_add_label at all, so a check on forge_add_label alone would always
-# miss GitLab fix-agent runs).
+# failed the retried comment would go unnoticed no matter how it's wrapped.
+# Always go straight to the direct API calls below, wrapped in
+# forge_retry_transient, so a persistent failure is actually surfaced.
 _post_failure_add_label() {
   local label="$1"
   local target="$2"
   local number="$3"
-
-  if [ "${target}" = "pr" ] && declare -F forge_add_pr_label >/dev/null 2>&1; then
-    forge_retry_transient forge_add_pr_label "${number}" "${label}" >/dev/null
-    return $?
-  fi
 
   if [ "${FULLSEND_FORGE:-}" = "gitlab" ]; then
     if [ -z "${REPO_ENCODED:-}" ]; then
