@@ -307,6 +307,92 @@ _post_failure_ensure_token() {
   fi
 }
 
+# Create the last-resort label directly against the forge API. Deliberately
+# does not call forge_create_label: that helper swallows errors
+# (`2>/dev/null || true` on every forge), so we would never know whether the
+# label actually got created. A create failure here is non-fatal (the label
+# may already exist), but it must be visible, not silently eaten.
+_post_failure_create_label() {
+  local label="$1"
+  local description="$2"
+
+  if [ "${FULLSEND_FORGE:-}" = "gitlab" ]; then
+    if [ -z "${REPO_ENCODED:-}" ]; then
+      return 1
+    fi
+    if declare -F _gitlab_code_api >/dev/null 2>&1; then
+      forge_retry_transient _gitlab_code_api POST "/projects/${REPO_ENCODED}/labels" \
+        --data-urlencode "name=${label}" \
+        --data-urlencode "description=${description}" \
+        --data-urlencode "color=#B60205" >/dev/null
+      return $?
+    fi
+    if declare -F _gitlab_api >/dev/null 2>&1; then
+      forge_retry_transient _gitlab_api POST "/projects/${REPO_ENCODED}/labels" \
+        --data-urlencode "name=${label}" \
+        --data-urlencode "description=${description}" \
+        --data-urlencode "color=#B60205" >/dev/null
+      return $?
+    fi
+    return 1
+  fi
+
+  forge_retry_transient gh label create "${label}" --repo "${REPO_FULL_NAME}" \
+    --description "${description}" --color "B60205" --force >/dev/null
+}
+
+# Apply the last-resort label directly against the forge API and report the
+# real exit status. Deliberately does not call forge_add_label: that helper
+# is the production path for code-agent (github-code-ops.lib.sh /
+# gitlab-code-ops.lib.sh) and swallows forge errors on the issue path
+# (`2>/dev/null || true`), so a failure during the same outage that already
+# failed the retried comment would go unnoticed. For target=pr, prefer
+# forge_add_pr_label — the helper both github-fix-ops.lib.sh and
+# gitlab-fix-ops.lib.sh actually define (neither fix-ops lib defines
+# forge_add_label at all, so a check on forge_add_label alone would always
+# miss GitLab fix-agent runs).
+_post_failure_add_label() {
+  local label="$1"
+  local target="$2"
+  local number="$3"
+
+  if [ "${target}" = "pr" ] && declare -F forge_add_pr_label >/dev/null 2>&1; then
+    forge_retry_transient forge_add_pr_label "${number}" "${label}" >/dev/null
+    return $?
+  fi
+
+  if [ "${FULLSEND_FORGE:-}" = "gitlab" ]; then
+    if [ -z "${REPO_ENCODED:-}" ]; then
+      return 1
+    fi
+    local endpoint
+    if [ "${target}" = "pr" ]; then
+      endpoint="/projects/${REPO_ENCODED}/merge_requests/${number}"
+    else
+      endpoint="/projects/${REPO_ENCODED}/issues/${number}"
+    fi
+    if declare -F _gitlab_code_api >/dev/null 2>&1; then
+      forge_retry_transient _gitlab_code_api PUT "${endpoint}" \
+        --data-urlencode "add_labels=${label}" >/dev/null
+      return $?
+    fi
+    if declare -F _gitlab_api >/dev/null 2>&1; then
+      forge_retry_transient _gitlab_api PUT "${endpoint}" \
+        --data-urlencode "add_labels=${label}" >/dev/null
+      return $?
+    fi
+    return 1
+  fi
+
+  if [ "${target}" = "pr" ]; then
+    forge_retry_transient gh pr edit "${number}" --repo "${REPO_FULL_NAME}" \
+      --add-label "${label}" >/dev/null
+    return $?
+  fi
+  forge_retry_transient gh api "repos/${REPO_FULL_NAME}/issues/${number}/labels" \
+    -f "labels[]=${label}" --silent
+}
+
 # Last-resort discoverability when even the retried failure comment fails.
 # A label survives when every comment attempt is swallowed by a forge outage.
 _post_failure_apply_failed_label() {
@@ -324,34 +410,21 @@ _post_failure_apply_failed_label() {
 
   if [ -z "${number}" ] || [ -z "${REPO_FULL_NAME:-}" ]; then
     gha_echo warning "Cannot apply last-resort ${label} label (missing issue/PR number or repo)"
-    return 0
+    return 1
   fi
 
   gha_echo warning "Applying last-resort ${label} label so the failure is discoverable"
 
-  if declare -F forge_create_label >/dev/null 2>&1; then
-    forge_create_label "${label}" "${description}" "B60205"
+  if ! _post_failure_create_label "${label}" "${description}"; then
+    gha_echo warning "Failed to create last-resort ${label} label (may already exist)"
   fi
 
-  if declare -F forge_add_label >/dev/null 2>&1; then
-    forge_add_label "${label}" "${target}" "${number}"
+  if _post_failure_add_label "${label}" "${target}" "${number}"; then
     return 0
   fi
 
-  if [ "${FULLSEND_FORGE:-}" = "gitlab" ]; then
-    gha_echo warning "Failed to apply last-resort ${label} label (GitLab helpers unavailable)"
-    return 0
-  fi
-
-  gh label create "${label}" --repo "${REPO_FULL_NAME}" \
-    --description "${description}" --color "B60205" --force || true
-  if [ "${target}" = "pr" ]; then
-    gh pr edit "${number}" --repo "${REPO_FULL_NAME}" --add-label "${label}" || \
-      gha_echo warning "Failed to apply last-resort ${label} label to PR #${number}"
-  else
-    gh issue edit "${number}" --repo "${REPO_FULL_NAME}" --add-label "${label}" || \
-      gha_echo warning "Failed to apply last-resort ${label} label to issue #${number}"
-  fi
+  gha_echo warning "Failed to apply last-resort ${label} label to ${target} #${number}"
+  return 1
 }
 
 report_post_failure_to_issue() {

@@ -47,6 +47,33 @@ _forge_retry_notice() {
   fi
 }
 
+# Sanitize captured command output before it reaches the runner log. Prefer
+# the shared sanitizers from post-failure-report.lib.sh (redacts tokens and
+# strips GHA workflow-command sequences); fall back to a minimal inline strip
+# of "::"/"%0A"/"%0D" sequences when that lib isn't loaded, so callers never
+# get a raw, unsanitized dump of forge output (which may embed
+# issue/agent-influenced text or truncated API response bodies).
+_forge_retry_sanitize() {
+  local text="$1"
+  if declare -F sanitize_failure_detail >/dev/null 2>&1; then
+    # max_lines=0 disables truncation — this is diagnostic log output, not a
+    # length-limited PR comment.
+    sanitize_failure_detail "${text}" 0
+    return 0
+  fi
+  if declare -F sanitize_gha_log_output >/dev/null 2>&1; then
+    sanitize_gha_log_output "${text}"
+    return 0
+  fi
+  local fallback="${text}"
+  fallback="${fallback//::/}"
+  fallback="${fallback//%0A/}"
+  fallback="${fallback//%0a/}"
+  fallback="${fallback//%0D/}"
+  fallback="${fallback//%0d/}"
+  printf '%s' "${fallback}"
+}
+
 # Run a command, retrying transient 5xx/timeout failures with exponential
 # backoff (2s, 4s, 8s by default). Non-transient failures return immediately.
 forge_retry_transient() {
@@ -81,8 +108,10 @@ forge_retry_transient() {
       continue
     fi
 
-    printf '%s' "${combined}" >&2
-    if [ -n "${combined}" ]; then
+    local sanitized_combined
+    sanitized_combined="$(_forge_retry_sanitize "${combined}")"
+    printf '%s' "${sanitized_combined}" >&2
+    if [ -n "${sanitized_combined}" ]; then
       printf '\n' >&2
     fi
     return "${rc}"

@@ -689,6 +689,205 @@ MOCK
 run_pr_comment_retry_test "fix-failure-comment-retries-transient-503" \
   99 "HTTP 503: Internal Server Error" 3
 
+# ---------------------------------------------------------------------------
+# forge_retry_transient sanitizes failure output before logging (review on
+# PR #1364: unsanitized combined stdout+stderr could carry workflow-command
+# sequences or tokens into public runner logs).
+# ---------------------------------------------------------------------------
+
+run_retry_sanitizes_output_test() {
+  local test_name="$1"
+
+  local tmp mock_bin rc=0 output
+  tmp=$(mktemp -d)
+  mock_bin="${tmp}/bin"
+  mkdir -p "${mock_bin}"
+  cat > "${mock_bin}/gh" <<'MOCK'
+#!/usr/bin/env bash
+echo "::error::HTTP 500 token=ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaa" >&2
+exit 1
+MOCK
+  chmod +x "${mock_bin}/gh"
+
+  output=$(
+    {
+      # shellcheck disable=SC2317
+      sleep() { :; }
+      PATH="${mock_bin}:${PATH}" FORGE_TRANSIENT_RETRY_ATTEMPTS=1 \
+        forge_retry_transient gh whatever
+    } 2>&1
+  ) || rc=$?
+
+  if [ "${rc}" -eq 0 ]; then
+    echo "FAIL: ${test_name}"
+    echo "  expected non-zero exit code"
+    FAILURES=$((FAILURES + 1))
+    rm -rf "${tmp}"
+    return
+  fi
+  if echo "${output}" | grep -q '::error::'; then
+    echo "FAIL: ${test_name}"
+    echo "  workflow-command sequence was not stripped: ${output}"
+    FAILURES=$((FAILURES + 1))
+    rm -rf "${tmp}"
+    return
+  fi
+  if echo "${output}" | grep -q 'ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaa'; then
+    echo "FAIL: ${test_name}"
+    echo "  token was not redacted: ${output}"
+    FAILURES=$((FAILURES + 1))
+    rm -rf "${tmp}"
+    return
+  fi
+  if ! echo "${output}" | grep -q 'HTTP 500'; then
+    echo "FAIL: ${test_name}"
+    echo "  diagnostic text was lost, not just sanitized: ${output}"
+    FAILURES=$((FAILURES + 1))
+    rm -rf "${tmp}"
+    return
+  fi
+
+  echo "PASS: ${test_name}"
+  rm -rf "${tmp}"
+}
+
+run_retry_sanitizes_output_test "forge-retry-sanitizes-failure-output"
+
+# ---------------------------------------------------------------------------
+# _post_failure_apply_failed_label dispatch (review on PR #1364: must not
+# reuse the best-effort forge_add_label/forge_create_label helpers, and must
+# actually apply the PR label on GitLab fix-agent runs, where forge_add_label
+# is never declared). Stubs the exact production helpers so the assertion
+# covers the real dispatch path, not just the unused raw-CLI fallback.
+# ---------------------------------------------------------------------------
+
+run_apply_label_uses_forge_add_pr_label_test() {
+  # shellcheck disable=SC2030,SC2031,SC2317
+  local test_name="$1"
+  local forge="$2"
+
+  local tmp mock_bin call_log stub_log
+  tmp=$(mktemp -d)
+  mock_bin="${tmp}/bin"
+  call_log="${tmp}/gh_calls"
+  stub_log="${tmp}/stub_calls"
+  mkdir -p "${mock_bin}"
+  : > "${call_log}"
+  : > "${stub_log}"
+
+  cat > "${mock_bin}/gh" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${CALL_LOG}"
+exit 0
+MOCK
+  chmod +x "${mock_bin}/gh"
+
+  # shellcheck disable=SC2030,SC2031,SC2317
+  (
+    forge_add_pr_label() {
+      printf '%s %s\n' "$1" "$2" >> "${STUB_LOG}"
+      return 0
+    }
+    export CALL_LOG="${call_log}"
+    export STUB_LOG="${stub_log}"
+    export FULLSEND_FORGE="${forge}"
+    export REPO_FULL_NAME="my-org/my-repo"
+    export PR_NUMBER="7"
+    export FORGE_TRANSIENT_RETRY_BASE_DELAY=0
+    PATH="${mock_bin}:${PATH}" _post_failure_apply_failed_label "fix-agent-failed" "pr"
+  )
+
+  if ! grep -q 'fix-agent-failed' "${stub_log}"; then
+    echo "FAIL: ${test_name}"
+    echo "  expected forge_add_pr_label to be invoked with fix-agent-failed"
+    echo "  stub calls:"
+    cat "${stub_log}"
+    FAILURES=$((FAILURES + 1))
+    rm -rf "${tmp}"
+    return
+  fi
+  if grep -qE '^pr edit ' "${call_log}"; then
+    echo "FAIL: ${test_name}"
+    echo "  fell back to the raw gh pr edit CLI instead of forge_add_pr_label"
+    echo "  calls:"
+    cat "${call_log}"
+    FAILURES=$((FAILURES + 1))
+    rm -rf "${tmp}"
+    return
+  fi
+
+  echo "PASS: ${test_name}"
+  rm -rf "${tmp}"
+}
+
+run_apply_label_uses_forge_add_pr_label_test \
+  "apply-label-github-fix-agent-uses-forge-add-pr-label" "github"
+run_apply_label_uses_forge_add_pr_label_test \
+  "apply-label-gitlab-fix-agent-uses-forge-add-pr-label" "gitlab"
+
+run_gitlab_issue_label_direct_api_test() {
+  # shellcheck disable=SC2030,SC2031,SC2317
+  local test_name="$1"
+
+  local tmp call_log rc=0 output
+  tmp=$(mktemp -d)
+  call_log="${tmp}/calls"
+  : > "${call_log}"
+
+  output=$(
+    # shellcheck disable=SC2030,SC2031,SC2317
+    {
+      sleep() { :; }
+      _gitlab_code_api() {
+        printf '%s\n' "$*" >> "${CALL_LOG}"
+        if printf '%s' "$*" | grep -q '/labels '; then
+          return 0
+        fi
+        echo "GitLab API error (HTTP 503): Service Unavailable" >&2
+        return 1
+      }
+      export CALL_LOG="${call_log}"
+      export FULLSEND_FORGE="gitlab"
+      export REPO_FULL_NAME="group/project"
+      export REPO_ENCODED="group%2Fproject"
+      export ISSUE_NUMBER="42"
+      export FORGE_TRANSIENT_RETRY_BASE_DELAY=0
+      _post_failure_apply_failed_label "code-agent-failed" "issue"
+    } 2>&1
+  ) || rc=$?
+
+  if [ "${rc}" -eq 0 ]; then
+    echo "FAIL: ${test_name}"
+    echo "  expected a non-zero exit — the stubbed issue-label API always fails"
+    FAILURES=$((FAILURES + 1))
+    rm -rf "${tmp}"
+    return
+  fi
+  if ! grep -q 'issues/42' "${call_log}"; then
+    echo "FAIL: ${test_name}"
+    echo "  expected _gitlab_code_api PUT against the issue label endpoint"
+    echo "  calls:"
+    cat "${call_log}"
+    FAILURES=$((FAILURES + 1))
+    rm -rf "${tmp}"
+    return
+  fi
+  if ! echo "${output}" | grep -q 'Failed to apply last-resort'; then
+    echo "FAIL: ${test_name}"
+    echo "  expected the apply failure to be surfaced, not swallowed"
+    echo "  output: ${output}"
+    FAILURES=$((FAILURES + 1))
+    rm -rf "${tmp}"
+    return
+  fi
+
+  echo "PASS: ${test_name}"
+  rm -rf "${tmp}"
+}
+
+run_gitlab_issue_label_direct_api_test \
+  "apply-label-gitlab-issue-uses-direct-api-and-surfaces-failure"
+
 echo ""
 if [ ${FAILURES} -gt 0 ]; then
   echo "${FAILURES} test(s) failed"
