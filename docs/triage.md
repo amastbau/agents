@@ -191,9 +191,7 @@ and `env.sandbox` values, referenced from `.fullsend/config.yaml`.
   `TRIAGE_AUTO_CODE_CATEGORIES` and `requires_workflow_changes` is not set.
   If the field is omitted, the post-script withholds promotion.
 
-The `promote_to_ready_to_code` field is ignored when `TRIAGE_AUTO_CODE` is
-`on`/`always` or `off`/`never`, so existing harnesses keep their mechanical
-behavior. Use `discretionary` for workflows such as backlog grooming, where
+Use `discretionary` for workflows such as backlog grooming, where
 triage should still classify issues but must not flood the coding queue.
 
 ### Issue filing allowlist
