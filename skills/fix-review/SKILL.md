@@ -39,8 +39,9 @@ check remaining time **only if `TIMEOUT_SECONDS` is set**:
 
 ```bash
 if [ -n "${TIMEOUT_SECONDS:-}" ]; then
-  REMAINING=$(( TIMEOUT_SECONDS - ($(date +%s) - AGENT_START) ))
-  echo "::notice::Time check: ${REMAINING}s remaining"
+  ELAPSED=$(( $(date +%s) - AGENT_START ))
+  REMAINING=$(( TIMEOUT_SECONDS - ELAPSED ))
+  echo "::notice::Time check: ${ELAPSED}s elapsed, ${REMAINING}s remaining"
 fi
 ```
 
@@ -99,7 +100,7 @@ echo "::notice::STEP 2: Gather review feedback"
 
 First, fetch the current PR diff so you know exactly what code is on the branch.
 Use the forge-specific commands from your forge skill (e.g., `gh pr diff` on
-GitHub, `curl` to fetch MR changes on GitLab).
+GitHub, `curl` to fetch MR changes on GitLab). Also inspect CI.
 
 **If trigger type is `"bot"` (bot-triggered):**
 
@@ -127,8 +128,6 @@ For each finding, record: `finding`, `path`, `description`, `related_findings`. 
 
 **If trigger type is `"human"`:** Use `HUMAN_INSTRUCTION` as primary directive. If empty or vague, also follow step 2a.
 
-**Inspect project CI:** Follow the forge-specific skill and `agents/fix.md`. Write `ci_inspections`.
-
 ### 3. Discover repo conventions
 
 Read `CLAUDE.md`, `CONTRIBUTING.md`, `AGENTS.md`. Discover test/lint commands from `Makefile`, `package.json`, linter configs. Determine test command, lint command, commit conventions.
@@ -149,7 +148,7 @@ Read full files (not just reviewed lines), related test files, and affected impo
 
 ### 6. Implement fixes
 
-For each finding (top-down in file): make the change, follow existing patterns, avoid new dependencies unless requested, update tests if needed. **Scope guardrail:** Only address review feedback and authorized project-CI failures—no unmentioned refactors, features, bug fixes, or doc improvements.
+For each finding (top-down in file): make the change, follow existing patterns, avoid new dependencies unless requested, update tests if needed. **Scope guardrail:** Only address review feedback and CI failures—no unmentioned refactors, features, bug fixes, or doc improvements.
 
 ### 7. Verify
 
@@ -171,16 +170,19 @@ If secrets are detected: hard stop. Remove them, re-scan.
 echo "::notice::STEP 7b: Pre-commit hooks"
 ```
 
-Same rules as the code agent (step 9b of code-implementation):
-- Max 2 pre-commit/hook runs per validation-loop iteration (not per
-  sandbox). An infra-failed `pre-commit run` (no hook executed)
-  doesn't count — the direct-execution fallback replaces it. Each
-  validation-loop retry gets a fresh budget; 7c's retries don't
+Same rules as the code agent (see step 9b of the code-implementation
+skill for the full text):
+- Maximum 2 pre-commit/hook-execution runs per validation-loop
+  iteration (not per sandbox). A `pre-commit run` that failed on
+  infrastructure before executing any hook does not count — the
+  direct-execution fallback takes its place. A validation-loop retry
+  is a new iteration with a fresh budget; 7c's own retries do not
   reopen 7b.
 - Pre-format your code before running pre-commit.
-- If `pre-commit` can't run (e.g., can't fetch hook repos), don't
-  skip verification unless the fallback floor below forbids it —
-  instead run the configured hooks directly, honoring each hook's
+- If `pre-commit` itself cannot run — typically because it cannot
+  fetch remote hook repositories — do not skip verification, unless
+  the fallback floor below says you cannot afford it. Otherwise fall
+  back to running the configured hooks directly, honoring each hook's
   `entry`, `args`, `rev`, `stages`, `additional_dependencies`, and
   file filters.
 - If the second run still fails, log the exact hook, file, and error
@@ -191,12 +193,13 @@ Same rules as the code agent (step 9b of code-implementation):
 test -f .pre-commit-config.yaml && pre-commit run --files <all-changed-files>
 ```
 
-**Time recheck before the fallback.** Run only when `pre-commit run`
-failed on infrastructure (couldn't fetch hook repos, or died before
-any hook ran) — not after a pass or a real hook failure. The 10% gate
-covers the fast path only; the fallback installs each hook at its
-pinned `rev` via pip and can blow a thin margin. Re-check against a
-flat 300s floor (absolute — the cost doesn't scale with the budget):
+**Time recheck before the fallback.** Run this **only** when the
+`pre-commit run` above failed on infrastructure (could not fetch hook
+repositories, or died before executing any hook) — not after a pass,
+not after real hook errors. The 10% gate measured the fast path; the
+fallback `pip install`s each hook at its pinned `rev` and can outrun a
+thin margin, timing out with no commit at all. Re-check against a flat
+300s floor (absolute, because the cost does not scale with the budget):
 
 ```bash
 RUN_FALLBACK=1
@@ -290,12 +293,11 @@ which gitlint &>/dev/null && gitlint --commit HEAD
   "summary": "Addressed both review findings",
   "strategy_change": null,
   "tests_passed": true,
-  "files_changed": ["src/input.sh"],
-  "ci_inspections": [{"job": "lint", "classification": "passing"}]
+  "files_changed": ["src/input.sh"]
 }
 ```
 
-**Schema:** `additionalProperties: false`. Use only schema-defined fields — e.g. optional `rebased_onto_target` (`agents/fix.md` step 8) and `ci_inspections`. `trigger_source` is `"bot"`/`"human"`. Action types: `fix` (needs `type`, `finding`, `description`) or `disagree` (needs `type`, `finding`, `reason`). Required top-level: `pr_number`, `trigger_source`, `actions` (≥1), `summary`, `tests_passed`, `files_changed`.
+**Schema:** `additionalProperties: false`. Use only schema-defined fields — e.g. optional `rebased_onto_target` (`agents/fix.md` step 8). `trigger_source` is `"bot"`/`"human"`. Types: `fix` (needs `type`, `finding`, `description`) or `disagree` (needs `type`, `finding`, `reason`). Required: `pr_number`, `trigger_source`, `actions` (≥1), `summary`, `tests_passed`, `files_changed`.
 
 Validate: `fullsend-check-output "${FULLSEND_OUTPUT_DIR}/agent-result.json"`. If fails after 3 attempts, write best JSON and exit.
 
