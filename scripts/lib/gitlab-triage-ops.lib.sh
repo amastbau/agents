@@ -125,8 +125,20 @@ tracker_remove_label() {
 }
 
 tracker_list_issue_labels() {
-  _gitlab_api GET "/projects/${REPO_ENCODED}/issues/${ISSUE_NUMBER}" 2>/dev/null \
-    | jq -r '.labels[]?' 2>/dev/null || true
+  local raw
+  # Fail closed: a failed or unparseable listing must not be indistinguishable
+  # from a genuinely empty label set, or stale-control-label removal silently
+  # skips every label while adds still fire for labels already present (#1408
+  # regression risk -- see review on PR #1410).
+  if ! raw=$(_gitlab_api GET "/projects/${REPO_ENCODED}/issues/${ISSUE_NUMBER}" 2>&1); then
+    echo "ERROR: failed to list labels for issue #${ISSUE_NUMBER}: ${raw}" >&2
+    return 1
+  fi
+  if ! echo "${raw}" | jq -e '.labels != null' >/dev/null 2>&1; then
+    echo "ERROR: unexpected response listing labels for issue #${ISSUE_NUMBER}: ${raw}" >&2
+    return 1
+  fi
+  echo "${raw}" | jq -r '.labels[]?'
 }
 
 tracker_list_repo_labels() {

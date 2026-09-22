@@ -23,12 +23,20 @@ ISSUE_LABELS_FILE="${TMPDIR}/issue-labels.txt"
 : > "${ISSUE_LABELS_FILE}"
 MOCK_BIN="${TMPDIR}/bin"
 mkdir -p "${MOCK_BIN}"
+FAIL_ISSUE_LABELS_MARKER="${TMPDIR}/fail-issue-labels"
 cat > "${MOCK_BIN}/gh" <<MOCKEOF
 #!/usr/bin/env bash
 # Current labels on the issue (GET .../issues/N/labels). Default empty so
 # tests observe adds; individual tests seed ISSUE_LABELS_FILE to exercise
 # the skip-already-present path (#1408).
 if [[ "\$1" == "api" ]] && [[ "\$2" == *"/issues/"*"/labels" ]] && [[ "\$*" == *"--paginate"* ]] && [[ "\$*" != *"-f "* ]] && [[ "\$*" != *"-X "* ]]; then
+  # FAIL_ISSUE_LABELS_MARKER simulates an API/CLI failure while listing
+  # current issue labels, to exercise the fail-closed path (silent-failure
+  # review finding on PR #1410).
+  if [[ -f "${FAIL_ISSUE_LABELS_MARKER}" ]]; then
+    echo "gh: HTTP 502: Bad Gateway" >&2
+    exit 1
+  fi
   cat "${ISSUE_LABELS_FILE}"
   exit 0
 fi
@@ -666,6 +674,37 @@ TEST_ISSUE_LABELS=$'feature\ntriaged\npriority/medium' run_test_stdout "noop-kee
 run_test_no_pattern "noop-skip-absent-blocked-remove" \
   '{"action":"insufficient","reasoning":"missing repro","clarity_scores":{"symptom":0.6,"cause":0.3,"reproduction":0.1,"impact":0.5,"overall":0.39},"comment":"Could you share the exact steps to reproduce this?"}' \
   "labels/blocked -X DELETE"
+
+# A failed (or unparseable) issue-labels snapshot must not be treated as "no
+# labels on the issue" -- that would silently skip every stale control-label
+# removal below while still calling tracker_add_label for labels already
+# present, regenerating the exact no-op add/remove cycle this script exists
+# to prevent (review finding on PR #1410). The script must abort loudly
+# instead.
+touch "${FAIL_ISSUE_LABELS_MARKER}"
+FAIL_SNAPSHOT_RUN_DIR="${TMPDIR}/run-issue-labels-fetch-failure-aborts"
+mkdir -p "${FAIL_SNAPSHOT_RUN_DIR}/iteration-1/output"
+echo '{"action":"insufficient","reasoning":"missing repro","clarity_scores":{"symptom":0.6,"cause":0.3,"reproduction":0.1,"impact":0.5,"overall":0.39},"comment":"Could you share the exact steps to reproduce this?"}' \
+  > "${FAIL_SNAPSHOT_RUN_DIR}/iteration-1/output/agent-result.json"
+seed_issue_labels
+: > "${GH_LOG}"
+FAIL_SNAPSHOT_EXIT_CODE=0
+(cd "${FAIL_SNAPSHOT_RUN_DIR}" && bash "${POST_SCRIPT}") > "${TMPDIR}/stdout.log" 2>&1 || FAIL_SNAPSHOT_EXIT_CODE=$?
+if [[ ${FAIL_SNAPSHOT_EXIT_CODE} -eq 0 ]]; then
+  echo "FAIL: issue-labels-fetch-failure-aborts — expected failure but got success"
+  FAILURES=$((FAILURES + 1))
+elif ! grep -qF -- "ERROR: cannot verify label state" "${TMPDIR}/stdout.log"; then
+  echo "FAIL: issue-labels-fetch-failure-aborts — expected loud error message not found"
+  cat "${TMPDIR}/stdout.log"
+  FAILURES=$((FAILURES + 1))
+elif grep -qE -- "labels(/[a-z-]+ -X DELETE|.*-f labels)" "${GH_LOG}"; then
+  echo "FAIL: issue-labels-fetch-failure-aborts — label mutation ran despite failed snapshot"
+  cat "${GH_LOG}"
+  FAILURES=$((FAILURES + 1))
+else
+  echo "PASS: issue-labels-fetch-failure-aborts"
+fi
+rm -f "${FAIL_ISSUE_LABELS_MARKER}"
 
 # Re-triaging a bug that already has ready-to-code must not re-add it.
 TEST_ISSUE_LABELS=$'bug\nready-to-code' run_test_no_pattern "noop-skip-ready-to-code-readd" \
@@ -1950,7 +1989,14 @@ if [[ "${URL}" =~ /issue/[A-Z]+-[0-9]+\?fields=components ]] && [[ "${METHOD}" =
 fi
 
 # Return current labels on the issue (used to skip no-op add/remove).
+# MOCK_JIRA_LABELS_FAIL simulates an API failure while listing current
+# issue labels, to exercise the fail-closed path (silent-failure review
+# finding on PR #1410).
 if [[ "${URL}" =~ \?fields=labels$ ]] && [[ "${METHOD}" == "GET" ]]; then
+  if [[ -n "${MOCK_JIRA_LABELS_FAIL:-}" ]]; then
+    echo "curl: (22) The requested URL returned error: 502" >&2
+    exit 22
+  fi
   echo '{"fields":{"labels":'"$(cat "${JIRA_ISSUE_LABELS_FILE:-/dev/null}" 2>/dev/null || echo '[]')"'}}'
   exit 0
 fi
@@ -2081,6 +2127,15 @@ run_jira_test "jira-insufficient-adds-needs-info" \
 TEST_ISSUE_LABELS='triaged' run_jira_test "jira-clears-stale-triaged-label" \
   '{"action":"insufficient","reasoning":"missing repro","clarity_scores":{"symptom":0.6,"cause":0.3,"reproduction":0.1,"impact":0.5,"overall":0.39},"comment":"Could you share the exact steps to reproduce this?"}' \
   '"remove":"triaged"'
+
+# A failed issue-labels snapshot on Jira must abort loudly rather than be
+# treated as "no labels" (silent-failure review finding on PR #1410).
+export MOCK_JIRA_LABELS_FAIL=1
+run_jira_test "jira-issue-labels-fetch-failure-aborts" \
+  '{"action":"insufficient","reasoning":"missing repro","clarity_scores":{"symptom":0.6,"cause":0.3,"reproduction":0.1,"impact":0.5,"overall":0.39},"comment":"Could you share the exact steps to reproduce this?"}' \
+  "" \
+  "true"
+unset MOCK_JIRA_LABELS_FAIL
 
 # Jira duplicate action transitions the issue via JIRA_DUPLICATE_TRANSITION.
 run_jira_test "jira-duplicate-transitions" \
@@ -2368,6 +2423,15 @@ if [[ "${URL}" =~ /issue$ ]] && [[ "${METHOD}" == "POST" ]]; then
 fi
 if [[ "${URL}" =~ /issue/[A-Z]+-[0-9]+\?fields=components ]] && [[ "${METHOD}" == "GET" ]]; then
   echo '{"fields":{"components":[{"name":"existing-component"}]}}'
+  exit 0
+fi
+# Return current labels on the issue (used to skip no-op add/remove). This
+# mock predates the no-op label diff, so it defaults to an empty label set;
+# tracker_list_issue_labels now fails closed on an unhandled/empty response,
+# so this branch must exist even though no component_actions test seeds
+# TEST_ISSUE_LABELS.
+if [[ "${URL}" =~ \?fields=labels$ ]] && [[ "${METHOD}" == "GET" ]]; then
+  echo '{"fields":{"labels":[]}}'
   exit 0
 fi
 exit 0

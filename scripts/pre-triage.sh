@@ -7,6 +7,13 @@
 # labels against the issue's current labels so unchanged labels are not
 # removed and re-added (#1408).
 #
+# Trade-off: this script no longer strips control labels up front, so the
+# mutual-exclusion guarantee (preventing conflicting control labels,
+# Story 2, #125) now only holds after a *successful* post-triage.sh run
+# reaches its stale-label reconciliation loop. An early exit in
+# post-triage.sh (e.g. invalid agent JSON) no longer guarantees stale
+# control labels are cleared before the next attempt.
+#
 # Required env vars:
 #   ISSUE_URL        — HTML URL of the issue
 #   FULLSEND_TRACKER — "github", "gitlab", or "jira" (falls back to FULLSEND_FORGE)
@@ -90,7 +97,16 @@ tracker_remove_label() {
 }
 
 tracker_list_issue_labels() {
-  gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/labels" --paginate --jq '.[].name' 2>/dev/null || true
+  local output
+  # Fail closed: a failed or unparseable listing must not be indistinguishable
+  # from a genuinely empty label set, or stale-control-label removal silently
+  # skips every label while adds still fire for labels already present (#1408
+  # regression risk -- see review on PR #1410).
+  if ! output=$(gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/labels" --paginate --jq '.[].name' 2>&1); then
+    echo "ERROR: failed to list labels for issue #${ISSUE_NUMBER}: ${output}" >&2
+    return 1
+  fi
+  printf '%s' "${output}"
 }
 
 tracker_list_repo_labels() {
@@ -313,8 +329,20 @@ tracker_remove_label() {
 }
 
 tracker_list_issue_labels() {
-  _gitlab_api GET "/projects/${REPO_ENCODED}/issues/${ISSUE_NUMBER}" 2>/dev/null \
-    | jq -r '.labels[]?' 2>/dev/null || true
+  local raw
+  # Fail closed: a failed or unparseable listing must not be indistinguishable
+  # from a genuinely empty label set, or stale-control-label removal silently
+  # skips every label while adds still fire for labels already present (#1408
+  # regression risk -- see review on PR #1410).
+  if ! raw=$(_gitlab_api GET "/projects/${REPO_ENCODED}/issues/${ISSUE_NUMBER}" 2>&1); then
+    echo "ERROR: failed to list labels for issue #${ISSUE_NUMBER}: ${raw}" >&2
+    return 1
+  fi
+  if ! echo "${raw}" | jq -e '.labels != null' >/dev/null 2>&1; then
+    echo "ERROR: unexpected response listing labels for issue #${ISSUE_NUMBER}: ${raw}" >&2
+    return 1
+  fi
+  echo "${raw}" | jq -r '.labels[]?'
 }
 
 tracker_list_repo_labels() {
@@ -616,8 +644,19 @@ tracker_remove_label() {
 
 tracker_list_issue_labels() {
   local raw_labels
-  raw_labels=$(_jira_api GET "/issue/${ISSUE_NUMBER}?fields=labels" 2>/dev/null) || return 0
-  echo "${raw_labels}" | jq -r '.fields.labels[]?' 2>/dev/null || true
+  # Fail closed: a failed or unparseable listing must not be indistinguishable
+  # from a genuinely empty label set, or stale-control-label removal silently
+  # skips every label while adds still fire for labels already present (#1408
+  # regression risk -- see review on PR #1410).
+  if ! raw_labels=$(_jira_api GET "/issue/${ISSUE_NUMBER}?fields=labels" 2>&1); then
+    echo "ERROR: failed to list labels for issue ${ISSUE_NUMBER}: ${raw_labels}" >&2
+    return 1
+  fi
+  if ! echo "${raw_labels}" | jq -e '.fields.labels != null' >/dev/null 2>&1; then
+    echo "ERROR: unexpected response listing labels for issue ${ISSUE_NUMBER}: ${raw_labels}" >&2
+    return 1
+  fi
+  echo "${raw_labels}" | jq -r '.fields.labels[]?'
 }
 
 # Jira has no per-project label registry like GitHub/GitLab — any string is

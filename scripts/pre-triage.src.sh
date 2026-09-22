@@ -6,6 +6,13 @@
 # labels against the issue's current labels so unchanged labels are not
 # removed and re-added (#1408).
 #
+# Trade-off: this script no longer strips control labels up front, so the
+# mutual-exclusion guarantee (preventing conflicting control labels,
+# Story 2, #125) now only holds after a *successful* post-triage.sh run
+# reaches its stale-label reconciliation loop. An early exit in
+# post-triage.sh (e.g. invalid agent JSON) no longer guarantees stale
+# control labels are cleared before the next attempt.
+#
 # Required env vars:
 #   ISSUE_URL        — HTML URL of the issue
 #   FULLSEND_TRACKER — "github", "gitlab", or "jira" (falls back to FULLSEND_FORGE)

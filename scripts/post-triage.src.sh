@@ -85,6 +85,12 @@ echo "Issue: #${ISSUE_NUMBER}"
 # (#1408). pr-open is also created and applied independently by the code
 # agent's pre-check (scripts/pre-code.sh) when it finds a human PR before
 # dispatching.
+#
+# Trade-off: stale control labels are only guaranteed to be cleared once
+# this reconciliation loop runs, i.e. after a *successful* run reaches this
+# point. pre-triage.sh no longer strips them up front, so an early exit
+# above (e.g. invalid agent JSON) leaves stale control labels in place
+# until the next successful run (see pre-triage.sh header).
 CONTROL_LABELS=("needs-info" "ready-to-code" "duplicate" "feature" "blocked" "triaged" "question" "bug" "documentation" "not-planned" "completed" "pr-open")
 
 is_control_label() {
@@ -99,7 +105,18 @@ is_control_label() {
 
 # Snapshot of labels currently on the issue, used to skip no-op add/remove
 # API calls that would otherwise generate timeline noise (#1408).
-CURRENT_ISSUE_LABELS=$(tracker_list_issue_labels)
+#
+# tracker_list_issue_labels fails closed (non-zero exit, no stdout) on API
+# or parse failure, so a transient failure here can never be mistaken for
+# "issue has no labels" -- treating it as empty would skip every stale
+# control-label removal below while apply_control_label/tracker_add_label
+# still fire for labels already present, regenerating the no-op add/remove
+# cycle this script exists to prevent. Abort loudly instead, matching the
+# behavior of the tracker_verify_labels_stripped helpers this replaced.
+if ! CURRENT_ISSUE_LABELS=$(tracker_list_issue_labels); then
+  echo "ERROR: cannot verify label state — API call failed" >&2
+  exit 1
+fi
 
 issue_has_label() {
   local label="$1"

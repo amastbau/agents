@@ -51,7 +51,16 @@ tracker_remove_label() {
 }
 
 tracker_list_issue_labels() {
-  gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/labels" --paginate --jq '.[].name' 2>/dev/null || true
+  local output
+  # Fail closed: a failed or unparseable listing must not be indistinguishable
+  # from a genuinely empty label set, or stale-control-label removal silently
+  # skips every label while adds still fire for labels already present (#1408
+  # regression risk -- see review on PR #1410).
+  if ! output=$(gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/labels" --paginate --jq '.[].name' 2>&1); then
+    echo "ERROR: failed to list labels for issue #${ISSUE_NUMBER}: ${output}" >&2
+    return 1
+  fi
+  printf '%s' "${output}"
 }
 
 tracker_list_repo_labels() {

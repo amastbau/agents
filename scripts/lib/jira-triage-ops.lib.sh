@@ -160,8 +160,19 @@ tracker_remove_label() {
 
 tracker_list_issue_labels() {
   local raw_labels
-  raw_labels=$(_jira_api GET "/issue/${ISSUE_NUMBER}?fields=labels" 2>/dev/null) || return 0
-  echo "${raw_labels}" | jq -r '.fields.labels[]?' 2>/dev/null || true
+  # Fail closed: a failed or unparseable listing must not be indistinguishable
+  # from a genuinely empty label set, or stale-control-label removal silently
+  # skips every label while adds still fire for labels already present (#1408
+  # regression risk -- see review on PR #1410).
+  if ! raw_labels=$(_jira_api GET "/issue/${ISSUE_NUMBER}?fields=labels" 2>&1); then
+    echo "ERROR: failed to list labels for issue ${ISSUE_NUMBER}: ${raw_labels}" >&2
+    return 1
+  fi
+  if ! echo "${raw_labels}" | jq -e '.fields.labels != null' >/dev/null 2>&1; then
+    echo "ERROR: unexpected response listing labels for issue ${ISSUE_NUMBER}: ${raw_labels}" >&2
+    return 1
+  fi
+  echo "${raw_labels}" | jq -r '.fields.labels[]?'
 }
 
 # Jira has no per-project label registry like GitHub/GitLab — any string is
