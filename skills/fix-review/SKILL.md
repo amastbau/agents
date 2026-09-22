@@ -39,9 +39,8 @@ check remaining time **only if `TIMEOUT_SECONDS` is set**:
 
 ```bash
 if [ -n "${TIMEOUT_SECONDS:-}" ]; then
-  ELAPSED=$(( $(date +%s) - AGENT_START ))
-  REMAINING=$(( TIMEOUT_SECONDS - ELAPSED ))
-  echo "::notice::Time check: ${ELAPSED}s elapsed, ${REMAINING}s remaining"
+  REMAINING=$(( TIMEOUT_SECONDS - ($(date +%s) - AGENT_START) ))
+  echo "::notice::Time check: ${REMAINING}s remaining"
 fi
 ```
 
@@ -172,19 +171,16 @@ If secrets are detected: hard stop. Remove them, re-scan.
 echo "::notice::STEP 7b: Pre-commit hooks"
 ```
 
-Same rules as the code agent (see step 9b of the code-implementation
-skill for the full text):
-- Maximum 2 pre-commit/hook-execution runs per validation-loop
-  iteration (not per sandbox). A `pre-commit run` that failed on
-  infrastructure before executing any hook does not count — the
-  direct-execution fallback takes its place. A validation-loop retry
-  is a new iteration with a fresh budget; 7c's own retries do not
+Same rules as the code agent (step 9b of code-implementation):
+- Max 2 pre-commit/hook runs per validation-loop iteration (not per
+  sandbox). An infra-failed `pre-commit run` (no hook executed)
+  doesn't count — the direct-execution fallback replaces it. Each
+  validation-loop retry gets a fresh budget; 7c's retries don't
   reopen 7b.
 - Pre-format your code before running pre-commit.
-- If `pre-commit` itself cannot run — typically because it cannot
-  fetch remote hook repositories — do not skip verification, unless
-  the fallback floor below says you cannot afford it. Otherwise fall
-  back to running the configured hooks directly, honoring each hook's
+- If `pre-commit` can't run (e.g., can't fetch hook repos), don't
+  skip verification unless the fallback floor below forbids it —
+  instead run the configured hooks directly, honoring each hook's
   `entry`, `args`, `rev`, `stages`, `additional_dependencies`, and
   file filters.
 - If the second run still fails, log the exact hook, file, and error
@@ -195,13 +191,12 @@ skill for the full text):
 test -f .pre-commit-config.yaml && pre-commit run --files <all-changed-files>
 ```
 
-**Time recheck before the fallback.** Run this **only** when the
-`pre-commit run` above failed on infrastructure (could not fetch hook
-repositories, or died before executing any hook) — not after a pass,
-not after real hook errors. The 10% gate measured the fast path; the
-fallback `pip install`s each hook at its pinned `rev` and can outrun a
-thin margin, timing out with no commit at all. Re-check against a flat
-300s floor (absolute, because the cost does not scale with the budget):
+**Time recheck before the fallback.** Run only when `pre-commit run`
+failed on infrastructure (couldn't fetch hook repos, or died before
+any hook ran) — not after a pass or a real hook failure. The 10% gate
+covers the fast path only; the fallback installs each hook at its
+pinned `rev` via pip and can blow a thin margin. Re-check against a
+flat 300s floor (absolute — the cost doesn't scale with the budget):
 
 ```bash
 RUN_FALLBACK=1
