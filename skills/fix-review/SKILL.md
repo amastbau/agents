@@ -100,7 +100,11 @@ echo "::notice::STEP 2: Gather review feedback"
 
 First, fetch the current PR diff so you know exactly what code is on the branch.
 Use the forge-specific commands from your forge skill (e.g., `gh pr diff` on
-GitHub, `curl` to fetch MR changes on GitLab). Also inspect CI.
+GitHub, `curl` to fetch MR changes on GitLab). Also inspect the PR's project
+CI using the forge-specific `fix-review` skill's CI recipes: read job
+logs/artifacts, classify each job (`passing`, `pending`, `pr-related`,
+`unrelated`, `flaky`, `transient-infra`), and record up to 50 inspected jobs
+in `ci_inspections` (see step 9).
 
 **If trigger type is `"bot"` (bot-triggered):**
 
@@ -148,7 +152,7 @@ Read full files (not just reviewed lines), related test files, and affected impo
 
 ### 6. Implement fixes
 
-For each finding (top-down in file): make the change, follow existing patterns, avoid new dependencies unless requested, update tests if needed. **Scope guardrail:** Only address review feedback and CI failures—no unmentioned refactors, features, bug fixes, or doc improvements.
+For each finding (top-down in file): make the change, follow existing patterns, avoid new dependencies unless requested, update tests if needed. **Scope guardrail:** Only address review feedback and project-CI failures classified `pr-related` that fall within authorized scope (a bot-triggered run, or a human instruction that does not already limit the work to a specific change — a narrow instruction such as `rebase` does not authorize extra CI-driven edits). For `flaky`/`transient-infra` failures, recommend a rerun instead of editing code. For `unrelated` failures, point the user to the responsible owner instead of editing code. No unmentioned refactors, features, bug fixes, or doc improvements.
 
 ### 7. Verify
 
@@ -293,11 +297,15 @@ which gitlint &>/dev/null && gitlint --commit HEAD
   "summary": "Addressed both review findings",
   "strategy_change": null,
   "tests_passed": true,
-  "files_changed": ["src/input.sh"]
+  "files_changed": ["src/input.sh"],
+  "ci_inspections": [
+    {"job": "lint", "status": "success", "classification": "passing", "diagnosis": "Lint passed."},
+    {"job": "unit-tests", "status": "failure", "classification": "pr-related", "diagnosis": "Failing test matches this diff.", "remediation": "Fixed the test."}
+  ]
 }
 ```
 
-**Schema:** `additionalProperties: false`. Use only schema-defined fields — e.g. optional `rebased_onto_target` (`agents/fix.md` step 8). `trigger_source` is `"bot"`/`"human"`. Types: `fix` (needs `type`, `finding`, `description`) or `disagree` (needs `type`, `finding`, `reason`). Required: `pr_number`, `trigger_source`, `actions` (≥1), `summary`, `tests_passed`, `files_changed`.
+**Schema:** `additionalProperties: false`. Use only schema-defined fields — e.g. optional `rebased_onto_target` (`agents/fix.md` step 8) and `ci_inspections` (project CI jobs inspected per step 2 and `agents/fix.md`'s Project CI inspection section; each entry requires `job` and `classification`, with `status`/`diagnosis`/`remediation` optional — see the forge-specific `fix-review` skill for the recipes that gather these). `trigger_source` is `"bot"`/`"human"`. Types: `fix` (needs `type`, `finding`, `description`) or `disagree` (needs `type`, `finding`, `reason`). Required: `pr_number`, `trigger_source`, `actions` (≥1), `summary`, `tests_passed`, `files_changed`.
 
 Validate: `fullsend-check-output "${FULLSEND_OUTPUT_DIR}/agent-result.json"`. If fails after 3 attempts, write best JSON and exit.
 
