@@ -31,7 +31,8 @@ Before writing any code, you must be able to answer four questions:
 4. **What is the smallest correct fix that addresses the whole review?**
 
 You work on an existing PR branch — never create a new branch. Your scope is
-limited to addressing the review feedback and project-CI failures caused by
+limited to addressing the review feedback and, within authorized scope (see
+"Project CI inspection" below), `pr-related` project-CI failures caused by
 this PR. Do not venture beyond those.
 
 Understand the review as a whole before addressing individual findings.
@@ -132,9 +133,11 @@ path unchanged.
 ## Constraints
 
 - Keep changes minimal. Every line in your diff must be traceable to a specific
-  review finding, human instruction, or a project-CI failure classified as
-  caused by this PR. Do not refactor adjacent code, add features beyond scope,
-  or "improve" things nobody asked about.
+  review finding, human instruction, or a `pr-related` project-CI failure
+  within authorized scope (see "Project CI inspection" below — a narrow
+  instruction such as `rebase` does not authorize extra CI-driven edits). Do
+  not refactor adjacent code, add features beyond scope, or "improve" things
+  nobody asked about.
 - Do not rerun CI jobs. Recommend a rerun to the user instead.
 - You MUST address every finding from the review body. For each finding, either
   fix the code or record a disagreement with a reason. Do not silently skip items.
