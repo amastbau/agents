@@ -170,15 +170,18 @@ tracker_has_comment_with_marker() {
   local count=0
   if [[ "${window_seconds}" -gt 0 ]]; then
     count=$(printf '%s' "${comments}" | jq -s --arg marker "${marker}" --argjson window "${window_seconds}" \
-      'add // [] | [.[] | select((.body // "") | contains($marker))
-            | select(
-                ((.created_at // "")
-                  | sub("\\.[0-9]+"; "")
-                  | sub("[+-][0-9]{2}:[0-9]{2}$"; "Z")
-                  | sub("[+-][0-9]{4}$"; "Z")
-                  | try fromdateiso8601 catch 0)
-                > (now - $window)
-              )] | length' 2>/dev/null) || count=0
+      'def ts_epoch:
+         ((. // "") | sub("\\.[0-9]+"; "")) as $s
+         | ($s | capture("(?<sign>[+-])(?<hh>[0-9]{2}):?(?<mm>[0-9]{2})$") // null) as $cap
+         | if $cap == null then
+             ($s | try fromdateiso8601 catch 0)
+           else
+             ($s | sub("[+-][0-9]{2}:?[0-9]{2}$"; "Z") | try fromdateiso8601 catch 0) as $naive
+             | (($cap.hh | tonumber) * 3600 + ($cap.mm | tonumber) * 60) as $off
+             | if $cap.sign == "+" then $naive - $off else $naive + $off end
+           end;
+       add // [] | [.[] | select((.body // "") | contains($marker))
+            | select((.created_at // "") | ts_epoch > (now - $window))] | length' 2>/dev/null) || count=0
   else
     count=$(printf '%s' "${comments}" | jq -s --arg marker "${marker}" \
       'add // [] | [.[] | select((.body // "") | contains($marker))] | length' 2>/dev/null) || count=0
@@ -491,15 +494,18 @@ tracker_has_comment_with_marker() {
   local count=0
   if [[ "${window_seconds}" -gt 0 ]]; then
     count=$(printf '%s' "${notes}" | jq --arg marker "${marker}" --argjson window "${window_seconds}" \
-      '[.[] | select((.body // "") | contains($marker))
-            | select(
-                ((.created_at // "")
-                  | sub("\\.[0-9]+"; "")
-                  | sub("[+-][0-9]{2}:[0-9]{2}$"; "Z")
-                  | sub("[+-][0-9]{4}$"; "Z")
-                  | try fromdateiso8601 catch 0)
-                > (now - $window)
-              )] | length' 2>/dev/null) || count=0
+      'def ts_epoch:
+         ((. // "") | sub("\\.[0-9]+"; "")) as $s
+         | ($s | capture("(?<sign>[+-])(?<hh>[0-9]{2}):?(?<mm>[0-9]{2})$") // null) as $cap
+         | if $cap == null then
+             ($s | try fromdateiso8601 catch 0)
+           else
+             ($s | sub("[+-][0-9]{2}:?[0-9]{2}$"; "Z") | try fromdateiso8601 catch 0) as $naive
+             | (($cap.hh | tonumber) * 3600 + ($cap.mm | tonumber) * 60) as $off
+             | if $cap.sign == "+" then $naive - $off else $naive + $off end
+           end;
+       [.[] | select((.body // "") | contains($marker))
+            | select((.created_at // "") | ts_epoch > (now - $window))] | length' 2>/dev/null) || count=0
   else
     count=$(printf '%s' "${notes}" | jq --arg marker "${marker}" \
       '[.[] | select((.body // "") | contains($marker))] | length' 2>/dev/null) || count=0
@@ -912,15 +918,18 @@ tracker_has_comment_with_marker() {
   local n=0
   if [[ "${window_seconds}" -gt 0 ]]; then
     n=$(printf '%s' "${comments}" | jq --arg marker "${marker}" --argjson window "${window_seconds}" \
-      '[.[] | select((.body | tostring) | contains($marker))
-            | select(
-                ((.created // "")
-                  | sub("\\.[0-9]+"; "")
-                  | sub("[+-][0-9]{2}:[0-9]{2}$"; "Z")
-                  | sub("[+-][0-9]{4}$"; "Z")
-                  | try fromdateiso8601 catch 0)
-                > (now - $window)
-              )] | length' 2>/dev/null) || n=0
+      'def ts_epoch:
+         ((. // "") | sub("\\.[0-9]+"; "")) as $s
+         | ($s | capture("(?<sign>[+-])(?<hh>[0-9]{2}):?(?<mm>[0-9]{2})$") // null) as $cap
+         | if $cap == null then
+             ($s | try fromdateiso8601 catch 0)
+           else
+             ($s | sub("[+-][0-9]{2}:?[0-9]{2}$"; "Z") | try fromdateiso8601 catch 0) as $naive
+             | (($cap.hh | tonumber) * 3600 + ($cap.mm | tonumber) * 60) as $off
+             | if $cap.sign == "+" then $naive - $off else $naive + $off end
+           end;
+       [.[] | select((.body | tostring) | contains($marker))
+            | select((.created // "") | ts_epoch > (now - $window))] | length' 2>/dev/null) || n=0
   else
     n=$(printf '%s' "${comments}" | jq --arg marker "${marker}" \
       '[.[] | select((.body | tostring) | contains($marker))] | length' 2>/dev/null) || n=0
@@ -1859,13 +1868,16 @@ _retriage_ack_body() {
 }
 
 _post_retriage_ack_if_needed() {
-  if tracker_has_comment_with_marker "${RETRIAGE_ACK_MARKER}" "${RETRIAGE_ACK_WINDOW_SECONDS}"; then
-    echo "Skipping re-triage acknowledgement — already posted within ${RETRIAGE_ACK_WINDOW_SECONDS}s"
-    return 0
-  fi
   local ack
   ack="${RETRIAGE_ACK_MARKER}
 $(_retriage_ack_body)"
+  # Key the duplicate check on the full ack text (marker + outcome sentence),
+  # not just the marker, so a differing outcome within the window still
+  # posts a new visible comment instead of being silently suppressed.
+  if tracker_has_comment_with_marker "${ack}" "${RETRIAGE_ACK_WINDOW_SECONDS}"; then
+    echo "Skipping re-triage acknowledgement — already posted within ${RETRIAGE_ACK_WINDOW_SECONDS}s"
+    return 0
+  fi
   echo "Posting re-triage acknowledgement comment..."
   if ! tracker_post_comment "${ack}"; then
     echo "::warning::Failed to post re-triage acknowledgement comment"

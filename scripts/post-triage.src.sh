@@ -798,13 +798,16 @@ _retriage_ack_body() {
 }
 
 _post_retriage_ack_if_needed() {
-  if tracker_has_comment_with_marker "${RETRIAGE_ACK_MARKER}" "${RETRIAGE_ACK_WINDOW_SECONDS}"; then
-    echo "Skipping re-triage acknowledgement — already posted within ${RETRIAGE_ACK_WINDOW_SECONDS}s"
-    return 0
-  fi
   local ack
   ack="${RETRIAGE_ACK_MARKER}
 $(_retriage_ack_body)"
+  # Key the duplicate check on the full ack text (marker + outcome sentence),
+  # not just the marker, so a differing outcome within the window still
+  # posts a new visible comment instead of being silently suppressed.
+  if tracker_has_comment_with_marker "${ack}" "${RETRIAGE_ACK_WINDOW_SECONDS}"; then
+    echo "Skipping re-triage acknowledgement — already posted within ${RETRIAGE_ACK_WINDOW_SECONDS}s"
+    return 0
+  fi
   echo "Posting re-triage acknowledgement comment..."
   if ! tracker_post_comment "${ack}"; then
     echo "::warning::Failed to post re-triage acknowledgement comment"

@@ -326,15 +326,18 @@ tracker_has_comment_with_marker() {
   local n=0
   if [[ "${window_seconds}" -gt 0 ]]; then
     n=$(printf '%s' "${comments}" | jq --arg marker "${marker}" --argjson window "${window_seconds}" \
-      '[.[] | select((.body | tostring) | contains($marker))
-            | select(
-                ((.created // "")
-                  | sub("\\.[0-9]+"; "")
-                  | sub("[+-][0-9]{2}:[0-9]{2}$"; "Z")
-                  | sub("[+-][0-9]{4}$"; "Z")
-                  | try fromdateiso8601 catch 0)
-                > (now - $window)
-              )] | length' 2>/dev/null) || n=0
+      'def ts_epoch:
+         ((. // "") | sub("\\.[0-9]+"; "")) as $s
+         | ($s | capture("(?<sign>[+-])(?<hh>[0-9]{2}):?(?<mm>[0-9]{2})$") // null) as $cap
+         | if $cap == null then
+             ($s | try fromdateiso8601 catch 0)
+           else
+             ($s | sub("[+-][0-9]{2}:?[0-9]{2}$"; "Z") | try fromdateiso8601 catch 0) as $naive
+             | (($cap.hh | tonumber) * 3600 + ($cap.mm | tonumber) * 60) as $off
+             | if $cap.sign == "+" then $naive - $off else $naive + $off end
+           end;
+       [.[] | select((.body | tostring) | contains($marker))
+            | select((.created // "") | ts_epoch > (now - $window))] | length' 2>/dev/null) || n=0
   else
     n=$(printf '%s' "${comments}" | jq --arg marker "${marker}" \
       '[.[] | select((.body | tostring) | contains($marker))] | length' 2>/dev/null) || n=0

@@ -667,6 +667,15 @@ run_test "sufficient-retriage-posts-ack-when-prior-ack-is-old" \
   "Re-triage requested: this is still a valid issue and is not ready for implementation."
 rm -f "${MOCK_COMMENTS_FILE}"
 
+# A differing outcome within the window must still post a new ack, even
+# though a recent comment already carries the retriage-ack marker (#1406).
+NOW_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+printf '%s' "[{\"id\":1,\"body\":\"<!-- fullsend:triage-agent -->\\nPrior triage summary\",\"created_at\":\"2020-01-01T00:00:00Z\"},{\"id\":2,\"body\":\"<!-- fullsend:triage-retriage-ack -->\\nRe-triage requested: an open PR/MR still addresses this issue.\",\"created_at\":\"${NOW_TS}\"}]" > "${MOCK_COMMENTS_FILE}"
+run_test "sufficient-retriage-posts-ack-when-outcome-differs" \
+  "${FEATURE_SUFFICIENT_JSON}" \
+  "Re-triage requested: this is still a valid issue and is not ready for implementation."
+rm -f "${MOCK_COMMENTS_FILE}"
+
 # Duplicate-ack skip must still update the sticky comment.
 NOW_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 printf '%s' "[{\"id\":1,\"body\":\"<!-- fullsend:triage-agent -->\\nPrior triage summary\",\"created_at\":\"2020-01-01T00:00:00Z\"},{\"id\":2,\"body\":\"<!-- fullsend:triage-retriage-ack -->\\nRe-triage requested: this is still a valid issue and is not ready for implementation.\",\"created_at\":\"${NOW_TS}\"}]" > "${MOCK_COMMENTS_FILE}"
