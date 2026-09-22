@@ -107,7 +107,6 @@ overlays:
       sandbox:
         ISSUE_NUMBER: "${ISSUE_NUMBER}"
         ISSUE_URL: "${GITHUB_ISSUE_URL}"
-        GH_TOKEN: "${GH_TOKEN}"
         FULLSEND_FORGE: github
   - when: 'runtime.forge == "gitlab"'
     providers:
@@ -129,7 +128,6 @@ overlays:
       sandbox:
         ISSUE_NUMBER: "${ISSUE_NUMBER}"
         ISSUE_URL: "${GITLAB_ISSUE_URL}"
-        GITLAB_TOKEN: "${GITLAB_TOKEN}"
         FULLSEND_FORGE: gitlab
   # Jira-source overlay — provides provider-backed Jira API access so
   # the sandbox can read work items directly through the credential
