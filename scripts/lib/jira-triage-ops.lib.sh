@@ -158,51 +158,10 @@ tracker_remove_label() {
     --data "$(jq -cn --arg l "${label}" '{update:{labels:[{remove:$l}]}}')" > /dev/null 2>/dev/null || true
 }
 
-tracker_strip_labels() {
-  local labels=("$@")
-  for label in "${labels[@]}"; do
-    _jira_api PUT "/issue/${ISSUE_NUMBER}" \
-      --data "$(jq -cn --arg l "${label}" '{update:{labels:[{remove:$l}]}}')" > /dev/null 2>/dev/null || true
-  done
-}
-
-tracker_verify_labels_stripped() {
-  local labels=("$@")
+tracker_list_issue_labels() {
   local raw_labels
-  raw_labels=$(_jira_api GET "/issue/${ISSUE_NUMBER}?fields=labels" 2>/dev/null) || {
-    echo "ERROR: cannot verify label state — API call failed" >&2
-    return 1
-  }
-
-  # An unparseable body must not read as "no labels remaining" — parse it up
-  # front so a bad shape fails loudly, matching the GitHub/GitLab sentinel.
-  local current_labels
-  current_labels=$(echo "${raw_labels}" | jq -r '[.fields.labels[]] | join("\n")' 2>/dev/null) \
-    || current_labels="VERIFY_FAILED"
-  if [[ "${current_labels}" == "VERIFY_FAILED" ]]; then
-    echo "ERROR: cannot verify label state — unexpected response shape" >&2
-    return 1
-  fi
-
-  local remaining=""
-  local current
-  while IFS= read -r current; do
-    [[ -z "${current}" ]] && continue
-    for check in "${labels[@]}"; do
-      if [[ "${current}" == "${check}" ]]; then
-        if [[ -n "${remaining}" ]]; then
-          remaining="${remaining}, ${current}"
-        else
-          remaining="${current}"
-        fi
-      fi
-    done
-  done <<< "${current_labels}"
-
-  if [[ -n "${remaining}" ]]; then
-    echo "ERROR: triage labels still present after reset: ${remaining}" >&2
-    return 1
-  fi
+  raw_labels=$(_jira_api GET "/issue/${ISSUE_NUMBER}?fields=labels" 2>/dev/null) || return 0
+  echo "${raw_labels}" | jq -r '.fields.labels[]?' 2>/dev/null || true
 }
 
 # Jira has no per-project label registry like GitHub/GitLab — any string is

@@ -124,42 +124,9 @@ tracker_remove_label() {
     --data-urlencode "remove_labels=${label}" > /dev/null 2>/dev/null || true
 }
 
-tracker_strip_labels() {
-  local labels=("$@")
-  for label in "${labels[@]}"; do
-    _gitlab_api PUT "/projects/${REPO_ENCODED}/issues/${ISSUE_NUMBER}" \
-      --data-urlencode "remove_labels=${label}" > /dev/null 2>/dev/null || true
-  done
-}
-
-tracker_verify_labels_stripped() {
-  local labels=("$@")
-  local current_labels
-  current_labels=$(_gitlab_api GET "/projects/${REPO_ENCODED}/issues/${ISSUE_NUMBER}" 2>/dev/null | jq -r '[.labels[]] | join(",")' 2>/dev/null || echo "VERIFY_FAILED")
-
-  if [[ "${current_labels}" == "VERIFY_FAILED" ]]; then
-    echo "ERROR: cannot verify label state — API call failed" >&2
-    return 1
-  fi
-
-  local remaining=""
-  IFS=',' read -ra current_array <<< "${current_labels}"
-  for current in "${current_array[@]}"; do
-    for check in "${labels[@]}"; do
-      if [[ "${current}" == "${check}" ]]; then
-        if [[ -n "${remaining}" ]]; then
-          remaining="${remaining}, ${current}"
-        else
-          remaining="${current}"
-        fi
-      fi
-    done
-  done
-
-  if [[ -n "${remaining}" ]]; then
-    echo "ERROR: triage labels still present after reset: ${remaining}" >&2
-    return 1
-  fi
+tracker_list_issue_labels() {
+  _gitlab_api GET "/projects/${REPO_ENCODED}/issues/${ISSUE_NUMBER}" 2>/dev/null \
+    | jq -r '.labels[]?' 2>/dev/null || true
 }
 
 tracker_list_repo_labels() {

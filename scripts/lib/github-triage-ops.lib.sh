@@ -50,34 +50,8 @@ tracker_remove_label() {
   gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/labels/${encoded}" -X DELETE --silent 2>/dev/null || true
 }
 
-tracker_strip_labels() {
-  local labels=("$@")
-  for label in "${labels[@]}"; do
-    local encoded
-    encoded=$(printf '%s' "${label}" | jq -sRr @uri)
-    gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/labels/${encoded}" -X DELETE --silent 2>/dev/null || true
-  done
-}
-
-tracker_verify_labels_stripped() {
-  local labels=("$@")
-  local labels_json
-  labels_json=$(printf '%s\n' "${labels[@]}" | jq -R . | jq -s .)
-
-  local remaining
-  remaining=$(gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/labels" 2>/dev/null \
-    | jq -r --argjson check "${labels_json}" \
-        '[.[] | select(.name as $n | $check | index($n)) | .name] | join(", ")' \
-    || echo "VERIFY_FAILED")
-
-  if [[ "${remaining}" == "VERIFY_FAILED" ]]; then
-    echo "ERROR: cannot verify label state — API call failed" >&2
-    return 1
-  fi
-  if [[ -n "${remaining}" ]]; then
-    echo "ERROR: triage labels still present after reset: ${remaining}" >&2
-    return 1
-  fi
+tracker_list_issue_labels() {
+  gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/labels" --paginate --jq '.[].name' 2>/dev/null || true
 }
 
 tracker_list_repo_labels() {

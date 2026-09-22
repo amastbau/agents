@@ -78,11 +78,13 @@ echo "Repo: ${REPO}"
 echo "Issue: #${ISSUE_NUMBER}"
 
 # Control labels managed by the triage pipeline. The post script refuses to
-# add or remove these via label_actions. pre-triage.sh resets needs-info,
-# ready-to-code, duplicate, feature, question, not-planned, completed,
-# and pr-open before each run; the action handlers below apply the rest.
-# pr-open is also created and applied independently by the code agent's
-# pre-check (scripts/pre-code.sh) when it finds a human PR before dispatching.
+# add or remove these via label_actions. Action handlers record the desired
+# control labels for this run; stale control labels that are not desired
+# are removed once after the handlers, skipping any label about to be
+# (re)applied so we don't generate a no-op unlabel/relabel timeline event
+# (#1408). pr-open is also created and applied independently by the code
+# agent's pre-check (scripts/pre-code.sh) when it finds a human PR before
+# dispatching.
 CONTROL_LABELS=("needs-info" "ready-to-code" "duplicate" "feature" "blocked" "triaged" "question" "bug" "documentation" "not-planned" "completed" "pr-open")
 
 is_control_label() {
@@ -95,18 +97,47 @@ is_control_label() {
   return 1
 }
 
+# Snapshot of labels currently on the issue, used to skip no-op add/remove
+# API calls that would otherwise generate timeline noise (#1408).
+CURRENT_ISSUE_LABELS=$(tracker_list_issue_labels)
+
+issue_has_label() {
+  local label="$1"
+  [[ -z "${CURRENT_ISSUE_LABELS}" ]] && return 1
+  echo "${CURRENT_ISSUE_LABELS}" | grep -qFx "${label}"
+}
+
+# Desired control labels for this run. Handlers record via apply_control_label
+# (immediate add, skipped when already present) or by appending when deferring
+# ready-to-code.
+DESIRED_CONTROL_LABELS=()
+
+apply_control_label() {
+  local label="$1"
+  DESIRED_CONTROL_LABELS+=("${label}")
+  if issue_has_label "${label}"; then
+    echo "Keeping existing '${label}' label"
+    return 0
+  fi
+  tracker_add_label "${label}"
+}
+
+is_desired_control_label() {
+  local label="$1"
+  local desired
+  [[ ${#DESIRED_CONTROL_LABELS[@]} -eq 0 ]] && return 1
+  for desired in "${DESIRED_CONTROL_LABELS[@]}"; do
+    [[ "${desired}" == "${label}" ]] && return 0
+  done
+  return 1
+}
+
 # --- Action-specific validation and control labels ---
 
 # Deferred label: when set, applied after label_actions so it fires last.
 # This prevents the ready-to-code webhook event from being superseded by
 # subsequent label events in the dispatch concurrency group (see #1752).
 DEFERRED_LABEL=""
-
-# Clear a stale "triaged" label from a prior re-triage before dispatching on
-# the new action. Every terminal action below resets its own set of control
-# labels, but "triaged" is only ever re-applied (never removed) by the
-# handlers themselves, so it must be cleared up front rather than per-branch.
-tracker_remove_label "triaged"
 
 # --- Cross-repo issue creation allowlist ---
 # Used by prerequisites and split actions. Read once before the case
@@ -159,9 +190,7 @@ case "${ACTION}" in
       echo "ERROR: action is 'insufficient' but no comment provided" >&2
       exit 1
     fi
-    tracker_remove_label "blocked"
-    tracker_remove_label "pr-open"
-    tracker_add_label "needs-info"
+    apply_control_label "needs-info"
     ;;
 
   duplicate)
@@ -174,9 +203,7 @@ case "${ACTION}" in
       echo "ERROR: issue cannot be a duplicate of itself (#${ISSUE_NUMBER})" >&2
       exit 1
     fi
-    tracker_remove_label "blocked"
-    tracker_remove_label "pr-open"
-    tracker_add_label "duplicate"
+    apply_control_label "duplicate"
     ;;
 
   prerequisites)
@@ -253,10 +280,7 @@ ${ISSUE_BODY}
 ${FAILED_CREATES}"
     fi
 
-    tracker_remove_label "ready-to-code"
-    tracker_remove_label "needs-info"
-    tracker_remove_label "pr-open"
-    tracker_add_label "blocked"
+    apply_control_label "blocked"
     ;;
 
   in-progress)
@@ -300,11 +324,8 @@ ${FAILED_CREATES}"
 
 **Addressed by:**${PR_LIST}"
 
-    tracker_remove_label "blocked"
-    tracker_remove_label "ready-to-code"
-    tracker_remove_label "needs-info"
     tracker_create_label "pr-open" "An open PR already addresses this issue" "D4C5F9"
-    tracker_add_label "pr-open"
+    apply_control_label "pr-open"
     ;;
 
   sufficient)
@@ -369,10 +390,6 @@ ${FAILED_CREATES}"
         fi
       fi
     fi
-
-    tracker_remove_label "blocked"
-    tracker_remove_label "needs-info"
-    tracker_remove_label "pr-open"
 
     # Low-risk categories (bug, documentation, performance) auto-promote to
     # ready-to-code, which triggers the code agent. Feature work and anything
@@ -454,50 +471,53 @@ ${FAILED_CREATES}"
       echo "::warning::Triage detected workflow file changes required (#325)"
       if [[ "${AUTO_CODE_ALLOWED}" == "true" ]]; then
         echo "Applying triaged label (workflow changes required)..."
-        tracker_add_label "triaged"
+        apply_control_label "triaged"
         WORKFLOW_BLOCKED=true
       fi
     fi
     case "${CATEGORY}" in
       bug)
         echo "Applying bug label..."
-        tracker_add_label "bug"
+        apply_control_label "bug"
         if [[ "${WORKFLOW_BLOCKED}" != "true" ]] && [[ "${AUTO_CODE_ALLOWED}" == "true" ]]; then
           echo "Deferring ready-to-code label (${CATEGORY}) until after label_actions..."
           DEFERRED_LABEL="ready-to-code"
+          DESIRED_CONTROL_LABELS+=("ready-to-code")
         elif [[ "${WORKFLOW_BLOCKED}" != "true" ]]; then
           echo "Applying triaged label (auto-code disabled for ${CATEGORY})..."
-          tracker_add_label "triaged"
+          apply_control_label "triaged"
         fi
         ;;
       documentation)
         echo "Applying documentation label..."
-        tracker_add_label "documentation"
+        apply_control_label "documentation"
         if [[ "${WORKFLOW_BLOCKED}" != "true" ]] && [[ "${AUTO_CODE_ALLOWED}" == "true" ]]; then
           echo "Deferring ready-to-code label (${CATEGORY}) until after label_actions..."
           DEFERRED_LABEL="ready-to-code"
+          DESIRED_CONTROL_LABELS+=("ready-to-code")
         elif [[ "${WORKFLOW_BLOCKED}" != "true" ]]; then
           echo "Applying triaged label (auto-code disabled for ${CATEGORY})..."
-          tracker_add_label "triaged"
+          apply_control_label "triaged"
         fi
         ;;
       performance)
         if [[ "${WORKFLOW_BLOCKED}" != "true" ]] && [[ "${AUTO_CODE_ALLOWED}" == "true" ]]; then
           echo "Deferring ready-to-code label (${CATEGORY}) until after label_actions..."
           DEFERRED_LABEL="ready-to-code"
+          DESIRED_CONTROL_LABELS+=("ready-to-code")
         elif [[ "${WORKFLOW_BLOCKED}" != "true" ]]; then
           echo "Applying triaged label (auto-code disabled for ${CATEGORY})..."
-          tracker_add_label "triaged"
+          apply_control_label "triaged"
         fi
         ;;
       feature)
         echo "Applying feature + triaged labels..."
-        tracker_add_label "feature"
-        tracker_add_label "triaged"
+        apply_control_label "feature"
+        apply_control_label "triaged"
         ;;
       *)
         echo "Applying triaged label (${CATEGORY})..."
-        tracker_add_label "triaged"
+        apply_control_label "triaged"
         ;;
     esac
     ;;
@@ -572,10 +592,6 @@ ${SUB_BODY}
 ${FAILED_CREATES}"
     fi
 
-    tracker_remove_label "blocked"
-    tracker_remove_label "needs-info"
-    tracker_remove_label "ready-to-code"
-    tracker_remove_label "pr-open"
     ;;
 
   question)
@@ -583,10 +599,7 @@ ${FAILED_CREATES}"
       echo "ERROR: action is 'question' but no comment provided" >&2
       exit 1
     fi
-    tracker_remove_label "blocked"
-    tracker_remove_label "needs-info"
-    tracker_remove_label "pr-open"
-    tracker_add_label "question"
+    apply_control_label "question"
     ;;
 
   not-planned)
@@ -594,10 +607,7 @@ ${FAILED_CREATES}"
       echo "ERROR: action is 'not-planned' but no comment provided" >&2
       exit 1
     fi
-    tracker_remove_label "blocked"
-    tracker_remove_label "needs-info"
-    tracker_remove_label "pr-open"
-    tracker_add_label "not-planned"
+    apply_control_label "not-planned"
     ;;
 
   completed)
@@ -605,10 +615,7 @@ ${FAILED_CREATES}"
       echo "ERROR: action is 'completed' but no comment provided" >&2
       exit 1
     fi
-    tracker_remove_label "blocked"
-    tracker_remove_label "needs-info"
-    tracker_remove_label "pr-open"
-    tracker_add_label "completed"
+    apply_control_label "completed"
     ;;
 
   *)
@@ -616,6 +623,16 @@ ${FAILED_CREATES}"
     exit 1
     ;;
 esac
+
+# Remove stale control labels from prior runs, skipping any label this run
+# is about to (re)apply so we don't create a pointless unlabel/relabel cycle.
+# Also skip labels that are not currently on the issue — DELETE of a missing
+# label is a no-op on the API but still not worth a request.
+for stale_label in "${CONTROL_LABELS[@]}"; do
+  is_desired_control_label "${stale_label}" && continue
+  issue_has_label "${stale_label}" || continue
+  tracker_remove_label "${stale_label}"
+done
 
 # --- Process label_actions (applies to all actions) ---
 
@@ -655,11 +672,19 @@ if [[ "${HAS_LABEL_ACTIONS}" == "true" ]]; then
           echo "::warning::Skipping label '$(_gha_sanitize "${LA_LABEL}")' -- does not exist in repo (will not auto-create)"
           continue
         fi
+        if issue_has_label "${LA_LABEL}"; then
+          echo "Keeping existing '$(_gha_sanitize "${LA_LABEL}")' label"
+          continue
+        fi
         echo "Adding label '$(_gha_sanitize "${LA_LABEL}")'..."
         tracker_add_label "${LA_LABEL}"
         LABELS_APPLIED=$((LABELS_APPLIED + 1))
         ;;
       remove)
+        if ! issue_has_label "${LA_LABEL}"; then
+          echo "Label '$(_gha_sanitize "${LA_LABEL}")' is not on the issue — skipping remove"
+          continue
+        fi
         echo "Removing label '$(_gha_sanitize "${LA_LABEL}")'..."
         tracker_remove_label "${LA_LABEL}"
         LABELS_APPLIED=$((LABELS_APPLIED + 1))
@@ -748,14 +773,18 @@ fi
 # --- Apply deferred label (must be last label mutation) ---
 
 if [[ -n "${DEFERRED_LABEL}" ]]; then
-  echo "Applying deferred label '${DEFERRED_LABEL}'..."
-  # forge_ensure_label creates the label via `gh` against REPO. On Jira, REPO
-  # is a project key, not an OWNER/REPO, and Jira has no label registry to
-  # create into — any string is already a valid label.
-  if [[ "${FULLSEND_TRACKER}" != "jira" ]]; then
-    forge_ensure_label "${DEFERRED_LABEL}"
+  if issue_has_label "${DEFERRED_LABEL}"; then
+    echo "Keeping existing '${DEFERRED_LABEL}' label"
+  else
+    echo "Applying deferred label '${DEFERRED_LABEL}'..."
+    # forge_ensure_label creates the label via `gh` against REPO. On Jira, REPO
+    # is a project key, not an OWNER/REPO, and Jira has no label registry to
+    # create into — any string is already a valid label.
+    if [[ "${FULLSEND_TRACKER}" != "jira" ]]; then
+      forge_ensure_label "${DEFERRED_LABEL}"
+    fi
+    tracker_add_label "${DEFERRED_LABEL}"
   fi
-  tracker_add_label "${DEFERRED_LABEL}"
 fi
 
 # --- Append action-hints footer (sufficient only) ---
