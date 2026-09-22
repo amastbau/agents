@@ -297,6 +297,51 @@ tracker_post_sticky_comment() {
     --marker "${marker}" --result -
 }
 
+# Returns 0 if an issue comment whose body contains marker exists.
+# If window_seconds is provided and greater than 0, only comments created
+# within that many seconds count. API failures are treated as "not found"
+# so a missing acknowledgement never fails the run (#1405).
+# Body may be ADF (object) or a string; tostring covers both.
+tracker_has_comment_with_marker() {
+  local marker="$1"
+  local window_seconds="${2:-0}"
+  _jira_require_vars || return 1
+
+  local comments="[]"
+  local start_at=0 max_pages=50
+  local _page
+  for _page in $(seq 1 "${max_pages}"); do
+    local batch
+    batch=$(_jira_api GET "/issue/${ISSUE_NUMBER}/comment?startAt=${start_at}&maxResults=100" 2>/dev/null) || break
+    local count
+    count=$(echo "${batch}" | jq -r '.comments | length // 0' 2>/dev/null) || break
+    [[ "${count}" -eq 0 ]] && break
+    comments=$(echo "${comments}" "$(echo "${batch}" | jq '.comments')" | jq -s 'add')
+    if [[ "${count}" -lt 100 ]]; then
+      break
+    fi
+    start_at=$((start_at + count))
+  done
+
+  local n=0
+  if [[ "${window_seconds}" -gt 0 ]]; then
+    n=$(printf '%s' "${comments}" | jq --arg marker "${marker}" --argjson window "${window_seconds}" \
+      '[.[] | select((.body | tostring) | contains($marker))
+            | select(
+                ((.created // "")
+                  | sub("\\.[0-9]+"; "")
+                  | sub("[+-][0-9]{2}:[0-9]{2}$"; "Z")
+                  | sub("[+-][0-9]{4}$"; "Z")
+                  | try fromdateiso8601 catch 0)
+                > (now - $window)
+              )] | length' 2>/dev/null) || n=0
+  else
+    n=$(printf '%s' "${comments}" | jq --arg marker "${marker}" \
+      '[.[] | select((.body | tostring) | contains($marker))] | length' 2>/dev/null) || n=0
+  fi
+  [[ "${n:-0}" -gt 0 ]]
+}
+
 # --- Issues ---
 
 tracker_close_issue() {
