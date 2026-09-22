@@ -116,9 +116,9 @@ gha_echo() { echo "$*" >> "${GHA_WARNINGS_LOG}"; }
 export -f gha_echo 2>/dev/null || true
 
 # Source the lib under test.
-GITHUB_CODE_OPS_SH_LOADED=""
-REPO_FULL_NAME="test-org/test-repo"
-ISSUE_NUMBER="42"
+export GITHUB_CODE_OPS_SH_LOADED=""
+export REPO_FULL_NAME="test-org/test-repo"
+export ISSUE_NUMBER="42"
 # shellcheck source=lib/github-code-ops.lib.sh
 source "${SCRIPT_DIR}/lib/github-code-ops.lib.sh"
 
@@ -150,4 +150,3 @@ if [ ${FAILURES} -gt 0 ]; then
   exit 1
 fi
 echo "All tests passed"
-
