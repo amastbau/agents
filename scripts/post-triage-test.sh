@@ -2233,6 +2233,18 @@ run_jira_test_stdout "jira-sufficient-retriage-skips-duplicate-ack" \
   "Skipping re-triage acknowledgement"
 rm -f "${MOCK_JIRA_COMMENTS_FILE}"
 
+# Jira Cloud actually returns comment bodies as ADF documents (objects), not
+# plain strings. The marker line and outcome sentence can land in separate
+# ADF text nodes split by a hardBreak node, so a naive `tostring | contains`
+# on the whole document never sees them as one contiguous substring. Exercise
+# that real shape so a regression back to whole-string matching is caught.
+NOW_TS=$(date -u +"%Y-%m-%dT%H:%M:%S.000+0000")
+printf '%s' "{\"startAt\":0,\"maxResults\":100,\"total\":2,\"comments\":[{\"id\":\"1\",\"body\":\"<!-- fullsend:triage-agent -->\\nPrior triage summary\",\"created\":\"2020-01-01T00:00:00.000+0000\"},{\"id\":\"2\",\"body\":{\"type\":\"doc\",\"version\":1,\"content\":[{\"type\":\"paragraph\",\"content\":[{\"type\":\"text\",\"text\":\"<!-- fullsend:triage-retriage-ack -->\"},{\"type\":\"hardBreak\"},{\"type\":\"text\",\"text\":\"Re-triage requested: this is still a valid issue and is not ready for implementation.\"}]}]},\"created\":\"${NOW_TS}\"}]}" > "${MOCK_JIRA_COMMENTS_FILE}"
+run_jira_test_stdout "jira-sufficient-retriage-skips-duplicate-ack-adf-body" \
+  '{"action":"sufficient","reasoning":"all clear","clarity_scores":{"symptom":0.9,"cause":0.85,"reproduction":0.9,"impact":0.8,"overall":0.87},"triage_summary":{"title":"Add dark mode","severity":"medium","category":"feature","problem":"No dark mode","root_cause_hypothesis":"Not implemented","reproduction_steps":["step 1"],"environment":"Linux","impact":"All users","recommended_fix":"Add theme toggle","proposed_test_case":"test_dark_mode"},"comment":"## Triage Summary\n\nThis is a feature."}' \
+  "Skipping re-triage acknowledgement"
+rm -f "${MOCK_JIRA_COMMENTS_FILE}"
+
 # Jira sufficient bug action applies bug label.
 run_jira_test "jira-sufficient-bug-adds-label" \
   '{"action":"sufficient","reasoning":"all clear","clarity_scores":{"symptom":0.9,"cause":0.85,"reproduction":0.9,"impact":0.8,"overall":0.87},"triage_summary":{"title":"Fix crash","severity":"high","category":"bug","problem":"Crash","root_cause_hypothesis":"Buffer overflow","reproduction_steps":["step 1"],"environment":"Linux","impact":"All users","recommended_fix":"Fix buffer","proposed_test_case":"test_crash"},"comment":"## Triage Summary\n\nReady."}' \

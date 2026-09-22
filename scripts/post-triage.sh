@@ -915,6 +915,13 @@ tracker_has_comment_with_marker() {
     start_at=$((start_at + count))
   done
 
+  # Jira Cloud returns comment bodies as ADF documents (objects), not plain
+  # strings. `tostring` JSON-serializes an ADF object, and a real newline
+  # between two lines of `marker` (e.g. the ack marker + outcome sentence)
+  # is not necessarily a contiguous substring of that serialization — the
+  # two lines can land in separate ADF text nodes split by a hardBreak node.
+  # Match each line of `marker` independently instead of the whole string,
+  # since each individual line still survives JSON-serialization intact.
   local n=0
   if [[ "${window_seconds}" -gt 0 ]]; then
     n=$(printf '%s' "${comments}" | jq --arg marker "${marker}" --argjson window "${window_seconds}" \
@@ -928,11 +935,13 @@ tracker_has_comment_with_marker() {
              | (($cap.hh | tonumber) * 3600 + ($cap.mm | tonumber) * 60) as $off
              | if $cap.sign == "+" then $naive - $off else $naive + $off end
            end;
-       [.[] | select((.body | tostring) | contains($marker))
+       ($marker | split("\n")) as $lines
+       | [.[] | select((.body | tostring) as $b | all($lines[]; . as $l | $b | contains($l)))
             | select((.created // "") | ts_epoch > (now - $window))] | length' 2>/dev/null) || n=0
   else
     n=$(printf '%s' "${comments}" | jq --arg marker "${marker}" \
-      '[.[] | select((.body | tostring) | contains($marker))] | length' 2>/dev/null) || n=0
+      '($marker | split("\n")) as $lines
+       | [.[] | select((.body | tostring) as $b | all($lines[]; . as $l | $b | contains($l)))] | length' 2>/dev/null) || n=0
   fi
   [[ "${n:-0}" -gt 0 ]]
 }
