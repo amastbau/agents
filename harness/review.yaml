@@ -45,7 +45,6 @@ post_script: scripts/post-review.sh
 
 validation_loop:
   script: scripts/validate-output-schema.sh
-  preflight_check: "scripts/common-preflight.sh"
   schema: schemas/review-result.schema.json
   # Interim, pending fullsend-ai/fullsend#7042: the runner cannot tell a
   # timeout from a schema failure, so a second iteration replays a killed

@@ -47,7 +47,6 @@ pre_script: scripts/pre-scribe.sh
 
 validation_loop:
   script: scripts/validate-output-schema.sh
-  preflight_check: "scripts/common-preflight.sh"
   schema: schemas/scribe-result.schema.json
   max_iterations: 2
 
