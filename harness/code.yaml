@@ -6,12 +6,8 @@
 #   agent       : reads the issue, implements, tests, scans, commits locally
 #   post_script : secret scan, pre-commit, push branch, create PR/MR, assign human
 #
-# The agent NEVER pushes or creates PRs/MRs. Enforcement: sandbox
-# GH_TOKEN/GITLAB_TOKEN is the provider's opaque placeholder (the real
-# token is read-only scoped and substituted at the proxy), PUSH_TOKEN
-# never enters the sandbox, and network policy restricts binary access
-# per forge. Only the post-script, running on the runner with
-# PUSH_TOKEN, can write.
+# The agent NEVER pushes or creates PRs/MRs as the sandbox policy does not allow
+# it.
 agent: agents/code.md
 doc: docs/code.md
 model: opus

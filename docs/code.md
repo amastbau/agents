@@ -224,12 +224,6 @@ vars. Key differences from single-forge setup:
 - **`ISSUE_URL`** replaces `GITHUB_ISSUE_URL` in scripts. The
   per-forge env file (`env/github/code.env` or `env/gitlab/code.env`)
   maps the platform-specific variable to `ISSUE_URL`.
-- **Forge tokens use provider-backed delivery** — `GH_TOKEN` /
-  `GITLAB_TOKEN` are not expanded into `env.sandbox` or host env
-  files. The sandbox receives the `github-code` / `gitlab-code`
-  provider's opaque placeholder; the real token is substituted at
-  the proxy. Runner pre/post scripts keep the real token via
-  `env.runner`.
 - **Jira-source overlay** — when the work item originates from Jira
   (`event.source.system == "jira"`), a dedicated overlay attaches the
   `jira-ro` provider and `fullsend-jira-ro` OpenShell profile so the
