@@ -84,6 +84,19 @@ require_grep_section() {
   fi
 }
 
+forbid_grep_section() {
+  local name="$1"
+  local file="$2"
+  local start_pattern="$3"
+  local end_pattern="$4"
+  local pattern="$5"
+  if section_text "${file}" "${start_pattern}" "${end_pattern}" | grep -qE "${pattern}"; then
+    fail "${name}" "forbidden pattern found between ${start_pattern} and ${end_pattern} in ${file}: ${pattern}"
+  else
+    pass "${name}"
+  fi
+}
+
 require_file "skill-present" "${SKILL}"
 require_file "preflight-present" "${PREFLIGHT}"
 require_file "agent-present" "${AGENT}"
@@ -112,6 +125,18 @@ require_grep "skill-step5-links-preflight" "${SKILL}" \
 
 require_grep "skill-challenger-exempts-subagent-failure" "${SKILL}" \
   'category: "sub-agent-failure".{0,15}findings'
+
+# The prose exemption is not enough on its own — the fill-in template an
+# orchestrator actually copies to build the challenger prompt must also
+# exclude sub-agent-failure findings, not just say so in the paragraph
+# above it. Scope to the 6d section so a match elsewhere can't satisfy this.
+require_grep_section "skill-6d-template-excludes-subagent-failure" "${SKILL}" \
+  '^#### 6d\. Challenger pass' '^#### 6e\.' \
+  'Findings to challenge.{0,150}excluding.{0,20}sub-agent-failure'
+
+forbid_grep_section "skill-6d-template-not-unqualified-all-findings" "${SKILL}" \
+  '^#### 6d\. Challenger pass' '^#### 6e\.' \
+  'JSON array of all findings from steps 6a'
 
 # --- pre-flight reference: the protocol the issue requires ---
 

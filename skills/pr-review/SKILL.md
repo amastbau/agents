@@ -948,22 +948,21 @@ The challenger has not seen the orchestrator's synthesis — it receives
 only the raw findings and the diff, preserving context isolation.
 
 **Skip when there is nothing to adjudicate.** If the merged finding set
-from steps 6a–6c is empty, skip the challenger dispatch — and only the
-dispatch. Continue through steps 6e, 6e-1, and 6f as usual: the
-orchestrator-only checks (6e) run after the challenger and can add
-findings of their own (protected paths, scope authorization, PR
-metadata), so 6f's "no findings → approve" outcome applies only when
-the set is still empty after them.
-A dimension dispatch failure cannot produce this empty set: step 5
-records a `sub-agent-failure` finding for it (high for Opus-tier,
-info for Sonnet-tier), so a failed dimension keeps the set non-empty
-and the challenger still runs. An empty set means every dispatched
-dimension came back clean, and the challenger's job is to adjudicate
-findings it is given, not manufacture them from nothing. This rule
-exists for determinism: it codifies the skip the orchestrator already
-makes on clean runs, so the choice is no longer a per-run judgment
-call. Whether a set holding only `info` findings should skip as well is
-an open question; as written it does not.
+from steps 6a–6c, **excluding `category: "sub-agent-failure"` findings**,
+is empty, skip the challenger dispatch. This covers the case where only
+`sub-agent-failure` findings exist too: the challenger never adjudicates
+those (see Part 3), so carry them forward unchanged. Continue through
+6e, 6e-1, and 6f as usual: 6f's "no findings → approve" applies only
+when the set is still empty after 6e's own checks (protected paths,
+scope authorization, PR metadata).
+A dimension dispatch failure alone does not trigger a dispatch, since
+its `sub-agent-failure` finding is excluded from the challenger's input.
+An empty filtered set means every dispatched dimension came back clean;
+the challenger adjudicates findings, it doesn't manufacture them. This
+rule exists for determinism, codifying the skip the orchestrator already
+makes on clean runs so it's no longer a per-run judgment call. Whether a
+set holding only `info` findings should skip as well is an open
+question; as written it does not.
 (This does forfeit the challenger's secondary, not-owned allowance —
 see `sub-agents/challenger.md`'s "Do not own" section — to flag a
 genuine issue it happens to notice while checking an empty set against
@@ -1004,7 +1003,8 @@ budget section), skip the challenger: keep the merged finding set from
    ## Context
 
    ### Findings to challenge
-   <JSON array of all findings from steps 6a–6c>
+   <JSON array of 6a–6c findings, excluding `category:
+   "sub-agent-failure"`>
 
    ### Diff
    Read the unified diff from `/sandbox/workspace/pr-diff.txt`.
