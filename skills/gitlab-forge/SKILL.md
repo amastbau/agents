@@ -97,6 +97,27 @@ GROUP_MR_BODY=$(echo "${GROUP_MR_RESPONSE}" | sed '$d')
 # concluding no implementing MR exists.
 ```
 
+## Project Visibility
+
+Before naming a candidate MR's project or PR/MR details in a public comment
+(see `agents/triage.md`'s Visibility check), fetch the project's
+`visibility` — the merge-request and issue endpoints above return
+`web_url`/`source_project_id`, not `visibility`; it only appears on the
+project resource itself. Check both the issue's own project and the
+candidate project.
+
+```bash
+# Visibility of a project: public | internal | private.
+curl --silent --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+  "https://${GITLAB_HOST}/api/v4/projects/${REPO_ENCODED}" | jq -r '.visibility'
+
+# Same call for the candidate project surfaced by a search above
+# (e.g. "group/candidate-project" from a group-wide or cross-project result).
+CANDIDATE_ENCODED=$(printf '%s' "group/candidate-project" | jq -sRr @uri)
+curl --silent --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+  "https://${GITLAB_HOST}/api/v4/projects/${CANDIDATE_ENCODED}" | jq -r '.visibility'
+```
+
 ## Repository Contents
 
 ```bash

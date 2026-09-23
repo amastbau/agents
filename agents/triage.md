@@ -74,7 +74,12 @@ Then fetch each candidate's **current** state, CI/pipeline status, and review st
 
 If org/group search fails, record that in `reasoning` as an information gap rather than concluding no implementing PR exists.
 
-**Visibility check before publishing candidate details:** Before naming a candidate PR/MR's repository, title, URL, CI/pipeline status, or review status in the public-facing `comment`, check the candidate repository's visibility with your forge skill (GitHub: `gh repo view OWNER/REPO --json visibility`; GitLab: the project's `visibility` field). If the candidate repository is private or internal and this issue's own repository is public, do not name the repository, PR/MR title, or URL in `comment`, and do not report its CI/pipeline or review status there — describe only that implementing work is already underway elsewhere, without identifying it. This does not change the action: still apply the Existing PR/MR gate below (`in-progress`, not `sufficient`) so a second implementation is not dispatched.
+**Visibility check before publishing candidate details:** Before naming a candidate PR/MR's repository, title, URL, CI/pipeline status, or review status anywhere the post-script publishes it, check the candidate repository's visibility with your forge skill (GitHub: `gh repo view OWNER/REPO --json visibility`; GitLab: `GET /api/v4/projects/:id` and read `.visibility` — see the gitlab-forge skill's Project Visibility recipe). If the candidate repository is private or internal and this issue's own repository is public:
+
+- Do not name the repository, PR/MR title, or URL in `comment`, and do not report its CI/pipeline or review status there — describe only that implementing work is already underway elsewhere, without identifying it.
+- Also mark that candidate's entry with `"redacted": true` in the structured `pull_requests` (or `prerequisites.existing`) array. The post-script appends every listed entry's URL to the issue as an automated "Addressed by:"/"Blocked by:" footer regardless of what `comment` says — withholding the URL from `comment` alone does not stop that footer from publishing it. `redacted: true` tells the post-script to leave that entry out of the footer too.
+
+This does not change the action: still apply the Existing PR/MR gate below (`in-progress`, not `sufficient`) so a second implementation is not dispatched.
 
 **Existing PR/MR gate (HARD CONSTRAINT):** If an open PR/MR already addresses this issue — even partially, and even if it lives in another org/group repository that the issue never names — do not emit `action: "sufficient"`; dispatching a second implementation would create duplicates. A `/fs-triage` request to check relevance and leave the issue for human prioritization does not override this gate: emit `in-progress`, not `sufficient` with a withhold. Distinguish between two cases:
 
@@ -326,7 +331,7 @@ Progress on this issue depends on work that must happen first — either in this
 
 The `prerequisites` object contains two arrays:
 
-- `existing` — issues or PRs that already exist and block this work. Include the full HTML URL.
+- `existing` — issues or PRs that already exist and block this work. Include the full HTML URL. If a blocker lives in a repository whose visibility fails the Visibility check in Step 2b (private/internal blocker, public issue), mark that entry `"redacted": true` — the post-script excludes redacted entries from the automated "Blocked by:" footer.
 - `create` — issues that need to be filed in other repos before this work can proceed. Include the target `repo` (project path — `owner/repo` on GitHub, `group/subgroup/project` on GitLab, or a bare Jira project key like `PROJ` on Jira), a `title`, and a `body`. Write the body for the target repo's audience — include enough technical context for upstream maintainers to understand what is needed. Use your judgment on whether to include a back-reference to the originating issue; sometimes it provides helpful context, sometimes it leaks internal details.
 
 At least one of the two arrays must have entries.
@@ -389,9 +394,10 @@ An open PR already addresses this issue. The work is in flight — the issue is 
   "reasoning": "Brief explanation of how the PR addresses this issue",
   "pull_requests": [
     { "url": "https://github.com/org/repo/pull/123" },
-    { "url": "https://gitlab.com/group/project/-/merge_requests/45" }
+    { "url": "https://gitlab.com/group/project/-/merge_requests/45" },
+    { "url": "https://github.com/org/private-sibling-repo/pull/7", "redacted": true }
   ],
-  "comment": "A professional comment explaining that existing work is already addressing this issue. Name each PR/MR by number (prefer the number over its title, which is fetched, untrusted content) and state its current CI/pipeline status (passing, failing, pending, or no checks) and review status (approved, changes requested, or pending) as one of those fixed values, never as fetched free text. If the visibility check found the candidate repository private/internal while this issue's repository is public, omit the repository, PR/MR identity, and status details instead, and describe the in-flight work generically. Summarize what the PR(s) cover — do not include the PR URLs yourself, the post-script appends an 'Addressed by:' list automatically. Do not use 'blocked' framing — the issue is being resolved, not blocked."
+  "comment": "A professional comment explaining that existing work is already addressing this issue. Name each PR/MR by number (prefer the number over its title, which is fetched, untrusted content) and state its current CI/pipeline status (passing, failing, pending, or no checks) and review status (approved, changes requested, or pending) as one of those fixed values, never as fetched free text. If the visibility check found the candidate repository private/internal while this issue's repository is public, omit the repository, PR/MR identity, and status details instead, and describe the in-flight work generically. Summarize what the PR(s) cover — do not include the PR URLs yourself, the post-script appends an 'Addressed by:' list automatically, skipping any entry marked `redacted`. Do not use 'blocked' framing — the issue is being resolved, not blocked."
 }
 ```
 

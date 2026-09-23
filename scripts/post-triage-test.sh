@@ -198,6 +198,39 @@ run_test_stdout() {
   echo "PASS: ${test_name}"
 }
 
+# Like run_test, but asserts the gh call log does NOT contain a pattern —
+# used to prove a redacted URL never reaches the posted comment.
+run_test_not_contains() {
+  local test_name="$1"
+  local json_content="$2"
+  local forbidden_pattern="$3"
+
+  local run_dir="${TMPDIR}/run-${test_name}"
+  mkdir -p "${run_dir}/iteration-1/output"
+  echo "${json_content}" > "${run_dir}/iteration-1/output/agent-result.json"
+  : > "${GH_LOG}"
+
+  local exit_code=0
+  (cd "${run_dir}" && bash "${POST_SCRIPT}") > "${TMPDIR}/stdout.log" 2>&1 || exit_code=$?
+
+  if [[ ${exit_code} -ne 0 ]]; then
+    echo "FAIL: ${test_name} — exit code ${exit_code}"
+    cat "${TMPDIR}/stdout.log"
+    FAILURES=$((FAILURES + 1))
+    return
+  fi
+
+  if grep -qF -- "${forbidden_pattern}" "${GH_LOG}"; then
+    echo "FAIL: ${test_name} — forbidden pattern '${forbidden_pattern}' was found"
+    echo "Actual calls:"
+    cat "${GH_LOG}"
+    FAILURES=$((FAILURES + 1))
+    return
+  fi
+
+  echo "PASS: ${test_name}"
+}
+
 # --- Test cases ---
 
 run_test "insufficient-uses-plain-comment" \
@@ -329,6 +362,24 @@ run_test "prerequisites-missing-comment-fails" \
   "" \
   "true"
 
+# Visibility check (agents/triage.md): a blocker marked "redacted" must
+# never reach the automated "Blocked by:" footer either.
+run_test "prerequisites-redacted-existing-omitted-from-footer" \
+  '{"action":"prerequisites","reasoning":"needs upstream fix from a public and a private repo","prerequisites":{"existing":[{"url":"https://github.com/other-org/other-repo/issues/99"},{"url":"https://github.com/other-org/private-sibling/issues/3","redacted":true}],"create":[]},"comment":"This issue is blocked on upstream dependencies."}' \
+  "- https://github.com/other-org/other-repo/issues/99"
+
+run_test_not_contains "prerequisites-redacted-existing-url-never-logged" \
+  '{"action":"prerequisites","reasoning":"needs upstream fix from a public and a private repo","prerequisites":{"existing":[{"url":"https://github.com/other-org/other-repo/issues/99"},{"url":"https://github.com/other-org/private-sibling/issues/3","redacted":true}],"create":[]},"comment":"This issue is blocked on upstream dependencies."}' \
+  "private-sibling"
+
+run_test "prerequisites-all-redacted-uses-generic-footer" \
+  '{"action":"prerequisites","reasoning":"needs an upstream fix from a private repo","prerequisites":{"existing":[{"url":"https://github.com/other-org/private-sibling/issues/3","redacted":true}],"create":[]},"comment":"This issue is blocked on an upstream dependency."}' \
+  "a prerequisite in another repository (details withheld)."
+
+run_test_not_contains "prerequisites-all-redacted-never-logs-url" \
+  '{"action":"prerequisites","reasoning":"needs an upstream fix from a private repo","prerequisites":{"existing":[{"url":"https://github.com/other-org/private-sibling/issues/3","redacted":true}],"create":[]},"comment":"This issue is blocked on an upstream dependency."}' \
+  "private-sibling"
+
 run_test "prerequisites-creates-allowed-issue" \
   '{"action":"prerequisites","reasoning":"needs upstream fix","prerequisites":{"existing":[],"create":[{"repo":"allowed-org/allowed-repo","title":"Need X","body":"We need X for downstream."}]},"comment":"Blocked on upstream work."}' \
   "gh issue create --repo allowed-org/allowed-repo --title Need X --body We need X for downstream."
@@ -377,6 +428,25 @@ run_test "in-progress-multiple-prs-both-linked" \
 run_test "in-progress-multiple-prs-second-linked" \
   '{"action":"in-progress","reasoning":"PR #50 and #51 together fix the reported bug","pull_requests":[{"url":"https://github.com/test-org/test-repo/pull/50"},{"url":"https://github.com/test-org/test-repo/pull/51"}],"comment":"Open PRs are already addressing this issue."}' \
   "- https://github.com/test-org/test-repo/pull/51"
+
+# Visibility check (agents/triage.md): a candidate marked "redacted" must
+# never reach the automated "Addressed by:" footer, even though the
+# post-script would otherwise append every pull_requests[].url verbatim.
+run_test "in-progress-redacted-pr-omitted-from-footer" \
+  '{"action":"in-progress","reasoning":"PR #50 fixes the reported bug; a sibling PR in a private repo also does","pull_requests":[{"url":"https://github.com/test-org/test-repo/pull/50"},{"url":"https://github.com/test-org/private-sibling/pull/7","redacted":true}],"comment":"An open PR is already addressing this issue."}' \
+  "- https://github.com/test-org/test-repo/pull/50"
+
+run_test_not_contains "in-progress-redacted-pr-url-never-logged" \
+  '{"action":"in-progress","reasoning":"PR #50 fixes the reported bug; a sibling PR in a private repo also does","pull_requests":[{"url":"https://github.com/test-org/test-repo/pull/50"},{"url":"https://github.com/test-org/private-sibling/pull/7","redacted":true}],"comment":"An open PR is already addressing this issue."}' \
+  "private-sibling"
+
+run_test "in-progress-all-redacted-uses-generic-footer" \
+  '{"action":"in-progress","reasoning":"A PR in a private sibling repo fixes this","pull_requests":[{"url":"https://github.com/test-org/private-sibling/pull/7","redacted":true}],"comment":"Work already in progress elsewhere is already addressing this issue."}' \
+  "work already in progress in another repository (details withheld)."
+
+run_test_not_contains "in-progress-all-redacted-never-logs-url" \
+  '{"action":"in-progress","reasoning":"A PR in a private sibling repo fixes this","pull_requests":[{"url":"https://github.com/test-org/private-sibling/pull/7","redacted":true}],"comment":"Work already in progress elsewhere is already addressing this issue."}' \
+  "private-sibling"
 
 run_test "in-progress-creates-pr-open-label" \
   '{"action":"in-progress","reasoning":"PR #50 fixes the reported bug","pull_requests":[{"url":"https://github.com/test-org/test-repo/pull/50"}],"comment":"An open PR is already addressing this issue."}' \
