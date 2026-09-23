@@ -206,11 +206,13 @@ changed since the prior review using the forge-specific review skill's
 "Prior review comparison" commands. Extract the list of changed file
 paths from the response.
 
-If the compare API fails (e.g., 404 from force-push or history
-rewrite), or if the response indicates a truncated result (e.g.,
-GitHub's compare API silently truncates file lists at 300 files when
-`total_commits` exceeds 250), treat all files as changed — no
-anchoring for this run.
+If the compare API fails (404, force-push, rewrite) or truncates
+(GitHub caps files at 300 when `total_commits` exceeds 250), treat
+all files as changed — no anchoring.
+
+#### 2a-1. Rebase-only short-circuit
+
+[rebase-short-circuit.md](references/rebase-short-circuit.md)
 
 ### 3. Triage
 

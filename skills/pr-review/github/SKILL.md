@@ -96,9 +96,47 @@ gh api "repos/${REPO_FULL_NAME}/issues/<issue-number>/comments"
 ## Prior review comparison
 
 ```bash
-# Compare commits between prior review and current HEAD
+# Three-dot compare for changed_since_prior (merge-base to HEAD).
+# After a same-tree rebase rewrite this lists the full PR diff, not
+# zero files — do not use it to detect identical content. Use Tree
+# identity (rebase-only) below for that.
 COMPARE=$(gh api "repos/${REPO_FULL_NAME}/compare/${PRIOR_REVIEW_SHA}...${HEAD_SHA}")
 CHANGED_FILES=$(echo "$COMPARE" | jq -r '.files[].filename')
+```
+
+## Tree identity (rebase-only)
+
+Two commits with the same tree have identical file content even when
+SHAs and parents differ. `GET /commits/{ref}` returns `.commit.tree.sha`.
+
+```bash
+PRIOR_TREE=$(gh api "repos/${REPO_FULL_NAME}/commits/${PRIOR_REVIEW_SHA}" --jq '.commit.tree.sha')
+HEAD_TREE=$(gh api "repos/${REPO_FULL_NAME}/commits/${HEAD_SHA}" --jq '.commit.tree.sha')
+echo "PRIOR_TREE=$PRIOR_TREE"
+echo "HEAD_TREE=$HEAD_TREE"
+if test -n "$PRIOR_TREE" && test -n "$HEAD_TREE" && test "$PRIOR_TREE" != "null" && test "$HEAD_TREE" != "null" && test "$PRIOR_TREE" = "$HEAD_TREE"; then
+  echo "TREES_IDENTICAL=true"
+else
+  echo "TREES_IDENTICAL=false"
+fi
+```
+
+A non-zero exit or HTTP 404 means the SHA is missing (force-push or
+garbage-collected commit). Fall through to a full review.
+
+## Base-branch file count (rebase-only)
+
+Compare the PR's file count against the base ref at the prior reviewed
+commit with the current `FILE_COUNT` from step 2 (`pr-files.json`).
+GitHub's compare `files` array truncates at 300; `total_commits` over
+250 is the same truncation signal as step 2a.
+
+```bash
+BASE_REF=$(gh api "repos/${REPO_FULL_NAME}/pulls/${PR_NUMBER}" --jq '.base.ref')
+gh api "repos/${REPO_FULL_NAME}/compare/${BASE_REF}...${PRIOR_REVIEW_SHA}" \
+  --jq '"PRIOR_BASE_FILE_COUNT=\(.files | length)\nPRIOR_BASE_TOTAL_COMMITS=\(.total_commits)"'
+CURRENT_BASE_FILE_COUNT=$(jq 'length' /sandbox/workspace/pr-files.json)
+echo "CURRENT_BASE_FILE_COUNT=$CURRENT_BASE_FILE_COUNT"
 ```
 
 ## Interactive mode (non-pipeline)
