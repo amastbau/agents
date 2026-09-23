@@ -32,7 +32,7 @@ Short-circuit only when every condition holds:
    - `PRIOR_BASE_FILE_COUNT` is less than 300 (GitHub's compare
      `files` array truncates at 300; a count of 300 is untrusted).
    - GitHub: `PRIOR_BASE_TOTAL_COMMITS` does not exceed 250.
-   - GitLab: `compare_timeout` is not `true`.
+   - GitLab: `COMPARE_TIMEOUT` is not `true`.
 6. The forge-specific skill's "Base ref stability (rebase-only)"
    command reports `BASE_REF_STABLE=true` — the live base ref/target
    branch matches `PRIOR_BASE_REF`, parsed directly from the hidden

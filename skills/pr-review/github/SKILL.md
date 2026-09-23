@@ -144,14 +144,17 @@ echo "CURRENT_BASE_FILE_COUNT=$CURRENT_BASE_FILE_COUNT"
 Identical trees say nothing about whether the PR was retargeted to a
 different base. Confirm base identity directly against the value the
 prior review persisted, rather than scanning retarget-event history:
-parse `PRIOR_BASE_REF` from the hidden Head SHA comment on the first
-line of the current section of `/sandbox/workspace/prior-review.txt`
-(step 7 of `SKILL.md` embeds it; reviews posted before that change
-have no `**Base Ref:**` field) and compare it to the live `BASE_REF`
-already fetched above.
+parse `PRIOR_BASE_REF` from whichever line in the current section
+(content before `<details><summary>Previous run</summary>`) of
+`/sandbox/workspace/prior-review.txt` carries `**Base Ref:**` (step 7
+of `SKILL.md` embeds it; reviews posted before that change have no
+`**Base Ref:**` field) and compare it to the live base ref, re-fetched
+here since shell variables do not survive between Bash tool calls.
 
 ```bash
-PRIOR_BASE_REF=$(sed -n '1s/.*\*\*Base Ref:\*\* \([^[:space:]]*\).*/\1/p' /sandbox/workspace/prior-review.txt)
+BASE_REF=$(gh api "repos/${REPO_FULL_NAME}/pulls/${PR_NUMBER}" --jq '.base.ref')
+PRIOR_BASE_REF=$(sed -n -e '/<summary>Previous run<\/summary>/q' \
+  -e 's/.*\*\*Base Ref:\*\* \([^[:space:]]*\).*/\1/p' /sandbox/workspace/prior-review.txt | head -n1)
 echo "PRIOR_BASE_REF=$PRIOR_BASE_REF"
 if test -n "$PRIOR_BASE_REF" && test "$PRIOR_BASE_REF" = "$BASE_REF"; then
   echo "BASE_REF_STABLE=true"

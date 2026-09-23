@@ -145,8 +145,9 @@ review.
 ## Base-branch file count (rebase-only)
 
 Compare the MR's file count against the target branch at the prior
-reviewed commit with the current change count from `mr-changes.json`.
-A `compare_timeout` of `true` is untrusted — fall through.
+reviewed commit with the current `CURRENT_BASE_FILE_COUNT` computed
+below from `mr-changes.json`. A `compare_timeout` of `true` is
+untrusted — fall through.
 
 ```bash
 TARGET_BRANCH=$(curl --fail --silent --show-error \
@@ -167,14 +168,21 @@ echo "CURRENT_BASE_FILE_COUNT=$CURRENT_BASE_FILE_COUNT"
 Identical trees say nothing about whether the MR was retargeted to a
 different target branch. Confirm base identity directly against the
 value the prior review persisted, rather than scanning system notes:
-parse `PRIOR_BASE_REF` from the hidden Head SHA comment on the first
-line of the current section of `/sandbox/workspace/prior-review.txt`
-(step 7 of `SKILL.md` embeds it; reviews posted before that change
-have no `**Base Ref:**` field) and compare it to the live
-`TARGET_BRANCH` already fetched above.
+parse `PRIOR_BASE_REF` from whichever line in the current section
+(content before `<details><summary>Previous run</summary>`) of
+`/sandbox/workspace/prior-review.txt` carries `**Base Ref:**` (step 7
+of `SKILL.md` embeds it; reviews posted before that change have no
+`**Base Ref:**` field) and compare it to the live target branch,
+re-fetched here since shell variables do not survive between Bash
+tool calls.
 
 ```bash
-PRIOR_BASE_REF=$(sed -n '1s/.*\*\*Base Ref:\*\* \([^[:space:]]*\).*/\1/p' /sandbox/workspace/prior-review.txt)
+TARGET_BRANCH=$(curl --fail --silent --show-error \
+  --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+  "https://${GITLAB_HOST}/api/v4/projects/${REPO_ENCODED}/merge_requests/${MR_IID}" \
+  | jq -r '.target_branch')
+PRIOR_BASE_REF=$(sed -n -e '/<summary>Previous run<\/summary>/q' \
+  -e 's/.*\*\*Base Ref:\*\* \([^[:space:]]*\).*/\1/p' /sandbox/workspace/prior-review.txt | head -n1)
 echo "PRIOR_BASE_REF=$PRIOR_BASE_REF"
 if test -n "$PRIOR_BASE_REF" && test "$PRIOR_BASE_REF" = "$TARGET_BRANCH"; then
   echo "BASE_REF_STABLE=true"
