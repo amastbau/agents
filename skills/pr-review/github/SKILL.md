@@ -127,9 +127,9 @@ garbage-collected commit). Fall through to a full review.
 ## Base-branch file count (rebase-only)
 
 Compare the PR's file count against the base ref at the prior reviewed
-commit with the current `FILE_COUNT` from step 2 (`pr-files.json`).
-GitHub's compare `files` array truncates at 300; `total_commits` over
-250 is the same truncation signal as step 2a.
+commit with the current `CURRENT_BASE_FILE_COUNT` computed below from
+`pr-files.json`. GitHub's compare `files` array truncates at 300;
+`total_commits` over 250 is the same truncation signal as step 2a.
 
 ```bash
 BASE_REF=$(gh api "repos/${REPO_FULL_NAME}/pulls/${PR_NUMBER}" --jq '.base.ref')
@@ -142,23 +142,27 @@ echo "CURRENT_BASE_FILE_COUNT=$CURRENT_BASE_FILE_COUNT"
 ## Base ref stability (rebase-only)
 
 Identical trees say nothing about whether the PR was retargeted to a
-different base. The Issue Events API records a `base_ref_changed`
-event for every retarget; a PR with no such event has had the same
-base ref since it was opened.
+different base. Confirm base identity directly against the value the
+prior review persisted, rather than scanning retarget-event history:
+parse `PRIOR_BASE_REF` from the hidden Head SHA comment on the first
+line of the current section of `/sandbox/workspace/prior-review.txt`
+(step 7 of `SKILL.md` embeds it; reviews posted before that change
+have no `**Base Ref:**` field) and compare it to the live `BASE_REF`
+already fetched above.
 
 ```bash
-BASE_REF_CHANGE_COUNT=$(gh api --paginate "repos/${REPO_FULL_NAME}/issues/${PR_NUMBER}/events" \
-  --jq '[.[] | select(.event == "base_ref_changed")] | length')
-echo "BASE_REF_CHANGE_COUNT=$BASE_REF_CHANGE_COUNT"
-if test "$BASE_REF_CHANGE_COUNT" = "0"; then
+PRIOR_BASE_REF=$(sed -n '1s/.*\*\*Base Ref:\*\* \([^[:space:]]*\).*/\1/p' /sandbox/workspace/prior-review.txt)
+echo "PRIOR_BASE_REF=$PRIOR_BASE_REF"
+if test -n "$PRIOR_BASE_REF" && test "$PRIOR_BASE_REF" = "$BASE_REF"; then
   echo "BASE_REF_STABLE=true"
 else
   echo "BASE_REF_STABLE=false"
 fi
 ```
 
-A non-zero exit or an empty `$BASE_REF_CHANGE_COUNT` means the check is
-inconclusive — treat that the same as `BASE_REF_STABLE=false`.
+An empty `$PRIOR_BASE_REF` (no `**Base Ref:**` field in the prior
+comment) means the check is inconclusive — treat that the same as
+`BASE_REF_STABLE=false`.
 
 ## Interactive mode (non-pipeline)
 

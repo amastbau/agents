@@ -34,24 +34,26 @@ Short-circuit only when every condition holds:
    - GitHub: `PRIOR_BASE_TOTAL_COMMITS` does not exceed 250.
    - GitLab: `compare_timeout` is not `true`.
 6. The forge-specific skill's "Base ref stability (rebase-only)"
-   command reports `BASE_REF_STABLE=true` — this PR/MR has never had a
-   base-ref retarget event. Tree identity (condition 4) only proves
-   HEAD's content is unchanged relative to `PRIOR_REVIEW_SHA` — it says
-   nothing about which base the prior review evaluated the diff
-   against. Condition 5's file-count check does not fill this gap
-   either: both sides of that comparison are computed against the
-   *current* base ref, so identical trees make it match trivially
-   regardless of whether a retarget happened. A retarget with no new
-   commits would otherwise still pass conditions 1-5. Treat a retarget
-   anywhere in the PR/MR's history, or a failed/inconclusive check, as
-   unverified and fail this condition — even a retarget that predates
-   the prior review, since the check cannot cheaply order it against
-   that review without additional persisted state.
+   command reports `BASE_REF_STABLE=true` — the live base ref/target
+   branch matches `PRIOR_BASE_REF`, parsed directly from the hidden
+   Head SHA comment the prior review persisted (step 7 of `SKILL.md`).
+   Tree identity (condition 4) only proves HEAD's content is unchanged
+   relative to `PRIOR_REVIEW_SHA` — it says nothing about which base
+   the prior review evaluated the diff against. Condition 5's
+   file-count check does not fill this gap either: both sides of that
+   comparison are computed against the *current* base ref, so identical
+   trees make it match trivially regardless of whether a retarget
+   happened. A retarget with no new commits would otherwise still pass
+   conditions 1-5. Comparing the persisted `PRIOR_BASE_REF` against the
+   live base ref closes that gap by direct confirmation rather than by
+   inferring stability from the absence of a retarget signal — treat a
+   missing `PRIOR_BASE_REF` (prior review predates this field) or a
+   mismatch as unverified and fail this condition.
 
 If any condition fails, continue to step 3. Fall-through cases:
 force-push or missing SHA (404), provenance not `app-verified`,
 different trees (code changed), untrusted or unequal base-branch file
-counts, base ref/target branch changed or unrecorded.
+counts, missing or mismatched persisted base ref.
 
 A rebase that drops a fix commit changes the tree, so this path does
 not fire. That fall-through is required so a later review can still
@@ -96,7 +98,8 @@ risk-assessment, no challenger). Produce the result in step 7:
    step 3 instead of short-circuiting.
 4. Compose the body using step 7's format exactly — no custom heading,
    summary prose, or visible SHAs:
-   - The hidden Head SHA comment (step 7), using the current HEAD SHA.
+   - The hidden Head SHA comment (step 7), using the current HEAD SHA
+     and current base ref.
    - If no prior findings were parsed: omit `## Review` and
      `### Findings` entirely; the body is the hidden comment followed
      by "Looks good to me" (step 7's no-findings case).

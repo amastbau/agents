@@ -1275,17 +1275,17 @@ contradict each other, escalate the verdict to match the language.
 
 Compose the review comment using this structure:
 
-The first line must be an HTML comment embedding the head SHA.
-Construct it by concatenating: the HTML comment open delimiter,
-a space, `**Head SHA:**`, a space, the SHA value, a space, and
-the HTML comment close delimiter. For example, if the SHA were
-`abc123`, the line would read (with no line break):
+The first line must be an HTML comment embedding the head SHA and
+current base ref (GitHub `.base.ref`, GitLab `.target_branch`).
+Concatenate: open delimiter, space, `**Head SHA:**`, space, SHA,
+space, `**Base Ref:**`, space, base ref, space, close delimiter.
+Example (no line break):
 
 ```text
-[open] **Head SHA:** abc123 [close]
+[open] **Head SHA:** abc123 **Base Ref:** main [close]
 ```
 
-where `[open]` = `<` + `!--` and `[close]` = `--` + `>`.
+`[open]` = `<` + `!--`, `[close]` = `--` + `>`.
 
 ```markdown
 ## Review
@@ -1308,9 +1308,9 @@ where `[open]` = `<` + `!--` and `[close]` = `--` + `>`.
 
 **Formatting rules:**
 
-- **Head SHA** is embedded in a hidden HTML comment on the first line.
-  It is not shown to reviewers but is required for re-review anchoring
-  (the `pre-fetch-prior-review.sh` script extracts it).
+- **Head SHA** (and base ref) is embedded in a hidden HTML comment on
+  the first line, not shown to reviewers. Required for re-review
+  anchoring (see references/rebase-short-circuit.md).
 - **No visible SHA, timestamp, or outcome lines.** These are implicit
   in the PR review process (the SHA is pinned via the formal
   review API, the timestamp is on the comment, and the outcome is

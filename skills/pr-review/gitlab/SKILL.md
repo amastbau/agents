@@ -165,26 +165,28 @@ echo "CURRENT_BASE_FILE_COUNT=$CURRENT_BASE_FILE_COUNT"
 ## Base ref stability (rebase-only)
 
 Identical trees say nothing about whether the MR was retargeted to a
-different target branch. GitLab logs a retarget as a system note
-("changed target branch from ..."); an MR with no such note has had
-the same target branch since it was opened.
+different target branch. Confirm base identity directly against the
+value the prior review persisted, rather than scanning system notes:
+parse `PRIOR_BASE_REF` from the hidden Head SHA comment on the first
+line of the current section of `/sandbox/workspace/prior-review.txt`
+(step 7 of `SKILL.md` embeds it; reviews posted before that change
+have no `**Base Ref:**` field) and compare it to the live
+`TARGET_BRANCH` already fetched above.
 
 ```bash
-BASE_REF_CHANGE_COUNT=$(curl --fail --silent --show-error \
-  --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
-  "https://${GITLAB_HOST}/api/v4/projects/${REPO_ENCODED}/merge_requests/${MR_IID}/notes?per_page=100" \
-  | jq '[.[] | select(.system == true and (.body | test("changed target branch")))] | length')
-echo "BASE_REF_CHANGE_COUNT=$BASE_REF_CHANGE_COUNT"
-if test "$BASE_REF_CHANGE_COUNT" = "0"; then
+PRIOR_BASE_REF=$(sed -n '1s/.*\*\*Base Ref:\*\* \([^[:space:]]*\).*/\1/p' /sandbox/workspace/prior-review.txt)
+echo "PRIOR_BASE_REF=$PRIOR_BASE_REF"
+if test -n "$PRIOR_BASE_REF" && test "$PRIOR_BASE_REF" = "$TARGET_BRANCH"; then
   echo "BASE_REF_STABLE=true"
 else
   echo "BASE_REF_STABLE=false"
 fi
 ```
 
-A non-zero curl exit, pagination beyond 100 notes, or an empty
-`$BASE_REF_CHANGE_COUNT` means the check is inconclusive — treat that
-the same as `BASE_REF_STABLE=false`.
+An empty `$PRIOR_BASE_REF` (no `**Base Ref:**` field in the prior
+comment) means the check is inconclusive — treat that the same as
+`BASE_REF_STABLE=false`. This removes the dependency on system-note
+retention and pagination entirely.
 
 ## Notes
 
