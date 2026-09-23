@@ -33,13 +33,16 @@ fi
 # Candidate-visibility lookup (_candidate_url_visibility in triage-ops.lib.sh,
 # the server-side check that backs agents/triage.md's Visibility check).
 # Treat any repo path containing "private-sibling" as private, matching the
-# redacted-URL test fixtures below; everything else is public. Not logged to
-# GH_LOG -- it's an internal safety lookup, not a call whose output should
-# ever reach the posted comment/label calls the other tests scan for.
+# redacted-URL test fixtures below; everything else is public. Emit the real
+# GitHub GraphQL RepositoryVisibility casing (PUBLIC/PRIVATE, uppercase) so
+# this mock exercises the same case-folding the production --jq pipeline
+# depends on, instead of masking a casing bug. Not logged to GH_LOG -- it's
+# an internal safety lookup, not a call whose output should ever reach the
+# posted comment/label calls the other tests scan for.
 if [[ "\$1" == "repo" ]] && [[ "\$2" == "view" ]] && [[ "\$*" == *"--json visibility"* ]]; then
   case "\$*" in
-    *private-sibling*) echo "private" ;;
-    *) echo "public" ;;
+    *private-sibling*) echo "PRIVATE" ;;
+    *) echo "PUBLIC" ;;
   esac
   exit 0
 fi

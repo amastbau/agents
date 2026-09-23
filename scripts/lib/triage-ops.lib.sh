@@ -47,6 +47,10 @@ _candidate_url_visibility() {
         echo "unknown"
         return
       }
+      # GitHub's GraphQL RepositoryVisibility enum is uppercase
+      # (PUBLIC/PRIVATE/INTERNAL); case-fold so the caller's lowercase
+      # "public" comparison actually matches.
+      vis=$(printf '%s' "${vis}" | tr '[:upper:]' '[:lower:]')
       echo "${vis:-unknown}"
       ;;
     https://*/-/merge_requests/*|https://*/-/issues/*)
