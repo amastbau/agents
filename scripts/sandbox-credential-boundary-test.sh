@@ -220,6 +220,9 @@ fi
 # Regression guard against every GitHub skill file, matching GitLab's
 # exhaustive no-private-token coverage below: gh sends GH_TOKEN via
 # Authorization, so no skill should introduce a custom header carrying it.
+# Flags GH_TOKEN on the same -H/--header line, on the line right after a
+# -H/--header flag (continuation), and in curl --config `header = ...`
+# lines, since none of those forms carry the token through Authorization.
 GITHUB_TOKEN_HEADER_FILES=(
   "${REPO_ROOT}/skills/github-forge/SKILL.md"
   "${REPO_ROOT}/skills/fix-review/github/SKILL.md"
@@ -239,7 +242,8 @@ for skill_file in "${GITHUB_TOKEN_HEADER_FILES[@]}"; do
   fi
 
   if grep -qF 'PRIVATE-TOKEN' "${skill_file}" ||
-    grep -E -- '(-H|--header)' "${skill_file}" | grep -qF 'GH_TOKEN'; then
+    grep -A 1 -E -- '(-H|--header)' "${skill_file}" | grep -qF 'GH_TOKEN' ||
+    grep -E -- 'header[[:space:]]*=' "${skill_file}" | grep -qF 'GH_TOKEN'; then
     assert_fail "${test_name}" "GH_TOKEN must not be passed via a custom header; gh sends Authorization"
   else
     assert_pass "${test_name}"
