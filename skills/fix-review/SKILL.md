@@ -17,18 +17,11 @@ produces fixes that introduce new issues or miss the reviewer's point.
 
 ## Tools reminder
 
-Use `Bash` for verification (step 7) and committing (step 8).
-
-- `git add <file>`, `git diff`, `git commit`
-- Forge API commands from your forge skill (`gh` or `curl`)
-- The **exact** test/lint command from step 3 (package manager included).
-  Do not substitute `npx` for `pnpm` or a full-tree lint for
-  `pnpm lint-staged`.
-- `pre-commit run --files <files>` — not a substitute for the repo lint
-
-Use `Read`/`Write`/`Grep`/`Glob` for file operations. Verify
-`command -v scan-secrets` before step 7; if missing, **STOP**.
-Modes: `scan-secrets <files>` (7a), `--staged` (8b).
+Use `Bash` for verification and committing — the exact step 3
+lint/test command, not a generic substitute. Use
+`Read`/`Write`/`Grep`/`Glob` for file operations. The `scan-secrets`
+helper is at `/usr/local/bin/scan-secrets` — verify with
+`command -v scan-secrets`. If missing, **STOP**.
 
 ## Progress markers
 
@@ -130,13 +123,10 @@ echo "::notice::STEP 3: Discover repo conventions"
 
 Use `Read`/`Glob` on `CLAUDE.md`, `CONTRIBUTING.md`, `AGENTS.md`,
 `Makefile`, `package.json`, `pyproject.toml`, and linter configs.
-
-**Precedence rule:** When AGENTS.md conflicts with patterns in existing
-code, follow AGENTS.md. Follow the documented lint/test command and
-order, including stage-then-lint; do not reorder around `git add`.
-
-Determine the exact **test command**, **lint command** (package manager
-included, e.g. `pnpm lint-staged`), and **commit conventions**.
+AGENTS.md takes precedence over patterns in existing code. Determine
+the exact **test command** and **lint command** (package manager
+included, e.g. `pnpm lint-staged`), including stage-then-lint order —
+do not reorder around `git add` — and the **commit conventions**.
 
 ### 4. Plan fixes
 
@@ -215,23 +205,23 @@ run the fallback as described above.
 echo "::notice::STEP 7c: Tests and linters"
 ```
 
-You MUST run both **tests** and **linters** using the exact step 3
-commands. Do not substitute `npx lint-staged` for `pnpm lint-staged`.
-Run them separately (not `&&`-chained; lint runs even if tests fail).
+Run both **tests** and **linters** using the exact step 3 commands,
+separately (not `&&`-chained; lint runs even if tests fail) — never a
+generic substitute (`npx` for `pnpm`, or a full-tree lint for
+`pnpm lint-staged`).
 
 Linting is separate from pre-commit (7b). If the command reads the git
 index (`lint-staged`, or docs say to stage first), `git add` intended
-files with explicit paths (never `git add -A` / `.` / `--all`) then
-run it. Do not substitute a full-tree lint (`pnpm lint:fix`).
-Otherwise run it now and stage in 8a.
+files with explicit paths (never `git add -A`/`.`/`--all`) before
+running it; otherwise run it now and stage in 8a.
 
-If tests or linters fail: fix, re-run 7a then 7c. Don't re-run
-pre-commit. Retry limit: `MAX_RETRIES` (default: 1).
+If tests or linters fail: fix, re-run 7a then 7c (not pre-commit).
+Retry limit: `MAX_RETRIES` (default: 1).
 
 **7d. Self-review**
 
-Review `git diff` and `git diff --cached`. Check for unrelated changes,
-debug prints/TODOs, secrets, protected paths. Revert extras.
+Review `git diff` and `git diff --cached` for unrelated changes, debug
+prints/TODOs, secrets, or protected paths; revert extras.
 
 ### 8. Commit
 
@@ -241,8 +231,8 @@ echo "::notice::STEP 8: Commit"
 
 **8a. Stage files**
 
-`git add` only files you modified (explicit paths). If 7c already
-staged them, re-add so auto-fixes are included.
+`git add` only files you modified (explicit paths); re-add after 7c
+to include any auto-fixes.
 
 **8b. Scan staged content**
 
