@@ -25,8 +25,10 @@ determine_outcome_label() {
   local action="$1"
   local downgraded="$2"
   local is_draft="${3:-false}"
+  local has_human_approval="${4:-false}"
 
-  if [ "${action}" = "approve" ] && [ "${downgraded}" = "false" ] && [ "${is_draft}" != "true" ]; then
+  if [ "${action}" = "approve" ] && [ "${is_draft}" != "true" ] && \
+     { [ "${downgraded}" = "false" ] || [ "${has_human_approval}" = "true" ]; }; then
     echo "ready-for-merge"
   elif { [ "${action}" = "approve" ] && { [ "${downgraded}" = "true" ] || [ "${is_draft}" = "true" ]; }; } || \
        [ "${action}" = "comment" ]; then
@@ -46,17 +48,19 @@ run_test() {
   local downgraded="$3"
   local expected="$4"
   local is_draft="${5:-false}"
+  local has_human_approval="${6:-false}"
 
   local actual
-  actual="$(determine_outcome_label "${action}" "${downgraded}" "${is_draft}")"
+  actual="$(determine_outcome_label "${action}" "${downgraded}" "${is_draft}" "${has_human_approval}")"
 
   if [ "${actual}" != "${expected}" ]; then
     echo "FAIL: ${test_name}"
-    echo "  action:     '${action}'"
-    echo "  downgraded: '${downgraded}'"
-    echo "  is_draft:   '${is_draft}'"
-    echo "  expected:   '${expected}'"
-    echo "  actual:     '${actual}'"
+    echo "  action:              '${action}'"
+    echo "  downgraded:          '${downgraded}'"
+    echo "  is_draft:            '${is_draft}'"
+    echo "  has_human_approval:  '${has_human_approval}'"
+    echo "  expected:            '${expected}'"
+    echo "  actual:              '${actual}'"
     FAILURES=$((FAILURES + 1))
     return
   fi
@@ -70,9 +74,21 @@ run_test() {
 run_test "approve-no-downgrade" \
   "approve" "false" "ready-for-merge"
 
-# Approve with protected-path downgrade → requires-manual-review
+# Approve with protected-path downgrade and no human approval → requires-manual-review
 run_test "approve-with-downgrade" \
   "approve" "true" "requires-manual-review"
+
+# Approve with protected-path downgrade but authorized human already approved → ready-for-merge
+run_test "approve-downgrade-with-human-approval" \
+  "approve" "true" "ready-for-merge" "false" "true"
+
+# Draft + human approval must still yield requires-manual-review
+run_test "approve-downgrade-human-approval-draft" \
+  "approve" "true" "requires-manual-review" "true" "true"
+
+# Genuine comment verdict is unchanged even if a human has approved
+run_test "comment-with-human-approval-unchanged" \
+  "comment" "false" "requires-manual-review" "false" "true"
 
 # Comment (split/conflicting review) → requires-manual-review
 run_test "comment-split-review" \
@@ -442,6 +458,55 @@ if [[ "\$1" == "pr" ]] && [[ "\$2" == "view" ]] && [[ "\$*" == *"--json state"* 
   exit 0
 fi
 
+# gh pr view ... --json headRefOid (TOCTOU re-fetch, not the combined query)
+if [[ "\$1" == "pr" ]] && [[ "\$2" == "view" ]] && [[ "\$*" == *"--json headRefOid"* ]] && [[ "\$*" != *"reviewDecision"* ]]; then
+  if [[ -n "\${MOCK_HEAD_SHA_REFETCH_FAIL:-}" ]]; then
+    echo "mock gh pr view headRefOid failure" >&2
+    exit 1
+  fi
+  echo "\${MOCK_PR_HEAD_SHA_REFETCH:-\${MOCK_PR_HEAD_SHA:-abcdef0123456789abcdef0123456789abcdef01}}"
+  exit 0
+fi
+
+# gh pr view ... --json reviewDecision,headRefOid,author
+# Unset MOCK_REVIEW_DECISION → null (fail closed). Set to "null" for the
+# same. MOCK_REVIEW_DECISION_FAIL simulates an API error.
+if [[ "\$1" == "pr" ]] && [[ "\$2" == "view" ]] && [[ "\$*" == *"--json reviewDecision"* ]]; then
+  if [[ -n "\${MOCK_REVIEW_DECISION_FAIL:-}" ]]; then
+    echo "mock gh pr view reviewDecision failure" >&2
+    exit 1
+  fi
+  SHA="\${MOCK_PR_HEAD_SHA:-abcdef0123456789abcdef0123456789abcdef01}"
+  AUTHOR="\${MOCK_PR_AUTHOR:-alice}"
+  if [[ -z "\${MOCK_REVIEW_DECISION+x}" ]] || [[ "\${MOCK_REVIEW_DECISION}" == "null" ]]; then
+    echo "{\"reviewDecision\":null,\"headRefOid\":\"\${SHA}\",\"author\":{\"login\":\"\${AUTHOR}\"}}"
+  else
+    echo "{\"reviewDecision\":\"\${MOCK_REVIEW_DECISION}\",\"headRefOid\":\"\${SHA}\",\"author\":{\"login\":\"\${AUTHOR}\"}}"
+  fi
+  exit 0
+fi
+
+# gh api repos/.../pulls/{n}/reviews --paginate
+if [[ "\$1" == "api" ]] && [[ "\$*" == *"/pulls/"*"/reviews"* ]]; then
+  if [[ -n "\${MOCK_REVIEWS_FAIL:-}" ]]; then
+    echo "mock gh api reviews failure" >&2
+    exit 1
+  fi
+  echo "\${MOCK_REVIEWS_JSON:-[]}"
+  exit 0
+fi
+
+# gh api repos/.../collaborators/{login}/permission
+if [[ "\$1" == "api" ]] && [[ "\$*" == *"/collaborators/"* ]]; then
+  if [[ -n "\${MOCK_PERMISSION_FAIL:-}" ]]; then
+    echo "mock gh api permission failure" >&2
+    exit 1
+  fi
+  ROLE="\${MOCK_COLLABORATOR_ROLE:-write}"
+  echo "{\"permission\":\"\${ROLE}\",\"role_name\":\"\${ROLE}\"}"
+  exit 0
+fi
+
 # gh api repos/.../pulls/{n}/files --paginate --jq '.[].filename'
 # → configurable via MOCK_PR_FILES (the mock emits the already-jq'd
 # filename list, matching what forge_get_pr_files consumes). Uses
@@ -565,10 +630,37 @@ if [[ "\${METHOD}" == "POST" ]]; then
   exit 0
 fi
 
+# GET /merge_requests/:iid/approvals
+if [[ "\${URL}" == *"/approvals"* ]]; then
+  if [[ -n "\${MOCK_MR_APPROVALS_FAIL:-}" ]]; then
+    echo "mock curl approvals failure" >&2
+    exit 1
+  fi
+  if [[ -n "\${MOCK_MR_APPROVALS_JSON:-}" ]]; then
+    echo "\${MOCK_MR_APPROVALS_JSON}"
+  else
+    echo '{"approved":false,"approved_by":[]}'
+  fi
+  exit 0
+fi
+
+# GET /members/all/:id
+if [[ "\${URL}" == *"/members/all/"* ]]; then
+  if [[ -n "\${MOCK_MR_MEMBER_FAIL:-}" ]]; then
+    echo "mock curl member failure" >&2
+    exit 1
+  fi
+  LEVEL="\${MOCK_MR_ACCESS_LEVEL:-40}"
+  echo "{\"access_level\":\${LEVEL}}"
+  exit 0
+fi
+
 # GET /merge_requests/:iid → MR metadata
-if [[ "\${URL}" == *"/merge_requests/"* ]] && [[ "\${URL}" != *"/notes"* ]] && [[ "\${URL}" != *"/changes"* ]] && [[ "\${URL}" != *"/labels"* ]]; then
+if [[ "\${URL}" == *"/merge_requests/"* ]] && [[ "\${URL}" != *"/notes"* ]] && [[ "\${URL}" != *"/changes"* ]] && [[ "\${URL}" != *"/labels"* ]] && [[ "\${URL}" != *"/approvals"* ]]; then
   DRAFT="\${MOCK_MR_IS_DRAFT:-false}"
-  echo '{"state":"opened","draft":'"\${DRAFT}"',"author":{"username":"testuser"},"iid":99}'
+  AUTHOR="\${MOCK_MR_AUTHOR:-testuser}"
+  SHA="\${MOCK_MR_SHA:-abc123}"
+  printf '{"state":"opened","draft":%s,"author":{"username":"%s"},"iid":99,"sha":"%s"}\n' "\${DRAFT}" "\${AUTHOR}" "\${SHA}"
   exit 0
 fi
 
@@ -1935,6 +2027,263 @@ run_protected_paths_default_drift_test() {
   echo "PASS: ${test_name}"
 }
 run_protected_paths_default_drift_test
+
+# ---------------------------------------------------------------------------
+# Human-approval override for protected-path downgrades
+# ---------------------------------------------------------------------------
+# When the agent approves a PR that touches protected paths, the post-script
+# normally applies requires-manual-review. If an authorized human has already
+# approved the current HEAD, the outcome is ready-for-merge instead.
+
+HUMAN_APPROVAL_HEAD_SHA="abc123"
+HUMAN_APPROVAL_REVIEWS='[{"state":"APPROVED","commit_id":"abc123","user":{"login":"alice","type":"User"},"submitted_at":"2026-01-01T00:00:00Z"}]'
+
+run_human_approval_test() {
+  local test_name="$1"
+  local expected_pattern="$2"
+  local match_where="$3"  # "log" (GH_LOG) or "stdout"
+  shift 3
+
+  local run_dir="${TMPDIR}/run-${test_name}"
+  mkdir -p "${run_dir}/iteration-1/output"
+  echo "${APPROVE_JSON}" > "${run_dir}/iteration-1/output/agent-result.json"
+  : > "${GH_LOG}"
+
+  local exit_code=0
+  # shellcheck disable=SC2030,SC2031
+  (
+    cd "${run_dir}"
+    export PATH="${MOCK_BIN}:${PATH}"
+    export REVIEW_TOKEN="fake-token"
+    export PR_NUMBER="99"
+    export REPO_FULL_NAME="test-org/test-repo"
+    export PR_URL="https://github.com/test-org/test-repo/pull/99"
+    export FULLSEND_FORGE="github"
+    export REVIEW_FINDING_SEVERITY_THRESHOLD="low"
+    export REVIEW_PROTECTED_PATHS="${DEFAULT_PROTECTED_PATHS}"
+    export MOCK_PR_FILES="scripts/post-review.src.sh"
+    export MOCK_PR_HEAD_SHA="${HUMAN_APPROVAL_HEAD_SHA}"
+    export MOCK_PR_AUTHOR="bob"
+    for assignment in "$@"; do
+      name="${assignment%%=*}"
+      value="${assignment#*=}"
+      printf -v "${name}" '%s' "${value}"
+      export "${name?}"
+    done
+    bash "${POST_SCRIPT}"
+  ) > "${TMPDIR}/stdout-${test_name}.log" 2>&1 || exit_code=$?
+
+  if [[ ${exit_code} -ne 0 ]]; then
+    echo "FAIL: ${test_name} — exit code ${exit_code}"
+    cat "${TMPDIR}/stdout-${test_name}.log"
+    FAILURES=$((FAILURES + 1))
+    return
+  fi
+
+  local haystack
+  if [[ "${match_where}" == "stdout" ]]; then
+    haystack="${TMPDIR}/stdout-${test_name}.log"
+  else
+    haystack="${GH_LOG}"
+  fi
+  if ! grep -qF -- "${expected_pattern}" "${haystack}"; then
+    echo "FAIL: ${test_name} — expected '${expected_pattern}' in ${match_where}"
+    echo "Actual stdout:"
+    cat "${TMPDIR}/stdout-${test_name}.log"
+    echo "Actual gh calls:"
+    cat "${GH_LOG}"
+    FAILURES=$((FAILURES + 1))
+    return
+  fi
+
+  echo "PASS: ${test_name}"
+}
+
+# Happy path: reviewDecision APPROVED + human write approval on HEAD
+run_human_approval_test "human-approval-on-head-ready-for-merge" \
+  "--add-label ready-for-merge" "log" \
+  "MOCK_REVIEW_DECISION=APPROVED" \
+  "MOCK_REVIEWS_JSON=${HUMAN_APPROVAL_REVIEWS}" \
+  "MOCK_COLLABORATOR_ROLE=write"
+
+run_human_approval_test "human-approval-on-head-log-message" \
+  "Protected-path requirement satisfied by authorized human approval" "stdout" \
+  "MOCK_REVIEW_DECISION=APPROVED" \
+  "MOCK_REVIEWS_JSON=${HUMAN_APPROVAL_REVIEWS}" \
+  "MOCK_COLLABORATOR_ROLE=write"
+
+# Stale SHA: approval is on a different commit than current HEAD
+run_human_approval_test "human-approval-stale-sha-manual-review" \
+  "--add-label requires-manual-review" "log" \
+  "MOCK_REVIEW_DECISION=APPROVED" \
+  "MOCK_REVIEWS_JSON=[{\"state\":\"APPROVED\",\"commit_id\":\"oldsha\",\"user\":{\"login\":\"alice\",\"type\":\"User\"},\"submitted_at\":\"2026-01-01T00:00:00Z\"}]" \
+  "MOCK_COLLABORATOR_ROLE=write"
+
+# Bot-only approval (type=Bot)
+run_human_approval_test "human-approval-bot-type-manual-review" \
+  "--add-label requires-manual-review" "log" \
+  "MOCK_REVIEW_DECISION=APPROVED" \
+  "MOCK_REVIEWS_JSON=[{\"state\":\"APPROVED\",\"commit_id\":\"abc123\",\"user\":{\"login\":\"some-app[bot]\",\"type\":\"Bot\"},\"submitted_at\":\"2026-01-01T00:00:00Z\"}]" \
+  "MOCK_COLLABORATOR_ROLE=write"
+
+# OAuth-style bot: type=User but login ends with [bot]
+run_human_approval_test "human-approval-bot-login-manual-review" \
+  "--add-label requires-manual-review" "log" \
+  "MOCK_REVIEW_DECISION=APPROVED" \
+  "MOCK_REVIEWS_JSON=[{\"state\":\"APPROVED\",\"commit_id\":\"abc123\",\"user\":{\"login\":\"some-app[bot]\",\"type\":\"User\"},\"submitted_at\":\"2026-01-01T00:00:00Z\"}]" \
+  "MOCK_COLLABORATOR_ROLE=write"
+
+# No reviews at all
+run_human_approval_test "human-approval-no-reviews-manual-review" \
+  "--add-label requires-manual-review" "log" \
+  "MOCK_REVIEW_DECISION=APPROVED" \
+  "MOCK_REVIEWS_JSON=[]"
+
+# reviewDecision CHANGES_REQUESTED even with a human APPROVED row
+run_human_approval_test "human-approval-changes-requested-manual-review" \
+  "--add-label requires-manual-review" "log" \
+  "MOCK_REVIEW_DECISION=CHANGES_REQUESTED" \
+  "MOCK_REVIEWS_JSON=${HUMAN_APPROVAL_REVIEWS}" \
+  "MOCK_COLLABORATOR_ROLE=write"
+
+# Human approved but only has read permission
+run_human_approval_test "human-approval-read-permission-manual-review" \
+  "--add-label requires-manual-review" "log" \
+  "MOCK_REVIEW_DECISION=APPROVED" \
+  "MOCK_REVIEWS_JSON=${HUMAN_APPROVAL_REVIEWS}" \
+  "MOCK_COLLABORATOR_ROLE=read"
+
+# Reviews API failure → fail closed
+run_human_approval_test "human-approval-reviews-api-fail-closed" \
+  "--add-label requires-manual-review" "log" \
+  "MOCK_REVIEW_DECISION=APPROVED" \
+  "MOCK_REVIEWS_FAIL=1"
+
+# reviewDecision fetch failure → fail closed
+run_human_approval_test "human-approval-decision-api-fail-closed" \
+  "--add-label requires-manual-review" "log" \
+  "MOCK_REVIEW_DECISION_FAIL=1"
+
+# Permission API failure → fail closed
+run_human_approval_test "human-approval-permission-api-fail-closed" \
+  "--add-label requires-manual-review" "log" \
+  "MOCK_REVIEW_DECISION=APPROVED" \
+  "MOCK_REVIEWS_JSON=${HUMAN_APPROVAL_REVIEWS}" \
+  "MOCK_PERMISSION_FAIL=1"
+
+# PR author approving their own PR does not count
+run_human_approval_test "human-approval-self-approve-manual-review" \
+  "--add-label requires-manual-review" "log" \
+  "MOCK_REVIEW_DECISION=APPROVED" \
+  "MOCK_PR_AUTHOR=alice" \
+  "MOCK_REVIEWS_JSON=${HUMAN_APPROVAL_REVIEWS}" \
+  "MOCK_COLLABORATOR_ROLE=write"
+
+# Draft PR with human approval still requires-manual-review (check is skipped)
+run_human_approval_test "human-approval-draft-manual-review" \
+  "--add-label requires-manual-review" "log" \
+  "MOCK_PR_IS_DRAFT=true" \
+  "MOCK_REVIEW_DECISION=APPROVED" \
+  "MOCK_REVIEWS_JSON=${HUMAN_APPROVAL_REVIEWS}" \
+  "MOCK_COLLABORATOR_ROLE=write"
+
+# TOCTOU: HEAD SHA changed between the first snapshot and the re-fetch
+run_human_approval_test "human-approval-toctou-sha-changed" \
+  "--add-label requires-manual-review" "log" \
+  "MOCK_REVIEW_DECISION=APPROVED" \
+  "MOCK_REVIEWS_JSON=${HUMAN_APPROVAL_REVIEWS}" \
+  "MOCK_COLLABORATOR_ROLE=write" \
+  "MOCK_PR_HEAD_SHA_REFETCH=deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+
+# TOCTOU re-fetch API failure → fail closed (not fail open)
+run_human_approval_test "human-approval-toctou-refetch-fail-closed" \
+  "--add-label requires-manual-review" "log" \
+  "MOCK_REVIEW_DECISION=APPROVED" \
+  "MOCK_REVIEWS_JSON=${HUMAN_APPROVAL_REVIEWS}" \
+  "MOCK_COLLABORATOR_ROLE=write" \
+  "MOCK_HEAD_SHA_REFETCH_FAIL=1"
+
+# ---------------------------------------------------------------------------
+# GitLab human-approval override
+# ---------------------------------------------------------------------------
+
+run_gitlab_human_approval_test() {
+  local test_name="$1"
+  local expected_stdout="$2"
+  shift 2
+
+  local run_dir="${TMPDIR}/run-${test_name}"
+  mkdir -p "${run_dir}/iteration-1/output"
+  echo '{"action":"approve","pr_number":99,"repo":"test-group/test-project","head_sha":"abc123","body":"LGTM"}' \
+    > "${run_dir}/iteration-1/output/agent-result.json"
+  : > "${GH_LOG}"
+
+  local exit_code=0
+  # shellcheck disable=SC2030,SC2031
+  (
+    cd "${run_dir}"
+    export PATH="${MOCK_BIN}:${PATH}"
+    export REVIEW_TOKEN="fake-gitlab-token"
+    export PR_NUMBER="99"
+    export REPO_FULL_NAME="test-group/test-project"
+    export PR_URL="https://gitlab.com/test-group/test-project/-/merge_requests/99"
+    export CI_SERVER_HOST="gitlab.com"
+    export FULLSEND_FORGE="gitlab"
+    export REVIEW_FINDING_SEVERITY_THRESHOLD="low"
+    export REVIEW_PROTECTED_PATHS="${DEFAULT_PROTECTED_PATHS}"
+    export MOCK_MR_FILES="scripts/post-review.src.sh"
+    export MOCK_MR_SHA="abc123"
+    export MOCK_MR_AUTHOR="bob"
+    for assignment in "$@"; do
+      name="${assignment%%=*}"
+      value="${assignment#*=}"
+      printf -v "${name}" '%s' "${value}"
+      export "${name?}"
+    done
+    bash "${POST_SCRIPT}"
+  ) > "${TMPDIR}/stdout-${test_name}.log" 2>&1 || exit_code=$?
+
+  if [[ ${exit_code} -ne 0 ]]; then
+    echo "FAIL: ${test_name} — exit code ${exit_code}"
+    cat "${TMPDIR}/stdout-${test_name}.log"
+    FAILURES=$((FAILURES + 1))
+    return
+  fi
+
+  if ! grep -qF -- "${expected_stdout}" "${TMPDIR}/stdout-${test_name}.log"; then
+    echo "FAIL: ${test_name} — expected stdout '${expected_stdout}' not found"
+    echo "Actual stdout:"
+    cat "${TMPDIR}/stdout-${test_name}.log"
+    FAILURES=$((FAILURES + 1))
+    return
+  fi
+
+  echo "PASS: ${test_name}"
+}
+
+GITLAB_APPROVED_JSON='{"approved":true,"approved_by":[{"user":{"id":2,"username":"alice","bot":false}}]}'
+
+run_gitlab_human_approval_test "gitlab-human-approval-ready-for-merge" \
+  "Protected-path requirement satisfied by authorized human approval" \
+  "MOCK_MR_APPROVALS_JSON=${GITLAB_APPROVED_JSON}" \
+  "MOCK_MR_ACCESS_LEVEL=40"
+
+run_gitlab_human_approval_test "gitlab-human-approval-not-approved" \
+  "No authorized human approval on current HEAD" \
+  "MOCK_MR_APPROVALS_JSON={\"approved\":false,\"approved_by\":[]}"
+
+run_gitlab_human_approval_test "gitlab-human-approval-bot-only" \
+  "No authorized human approval on current HEAD" \
+  "MOCK_MR_APPROVALS_JSON={\"approved\":true,\"approved_by\":[{\"user\":{\"id\":1,\"username\":\"project_123_bot\",\"bot\":true}}]}"
+
+run_gitlab_human_approval_test "gitlab-human-approval-guest-access" \
+  "No authorized human approval on current HEAD" \
+  "MOCK_MR_APPROVALS_JSON=${GITLAB_APPROVED_JSON}" \
+  "MOCK_MR_ACCESS_LEVEL=20"
+
+run_gitlab_human_approval_test "gitlab-human-approval-api-fail-closed" \
+  "No authorized human approval on current HEAD" \
+  "MOCK_MR_APPROVALS_FAIL=1"
 
 # ---------------------------------------------------------------------------
 # Risk assessment label + comment tests

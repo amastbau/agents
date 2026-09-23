@@ -211,3 +211,69 @@ forge_list_repo_labels() {
     page=$((page + 1))
   done
 }
+
+# Returns 0 if an authorized human has already approved the current HEAD,
+# 1 otherwise. Fail-closed on any API error or incomplete signal.
+#
+# Two independent gates, both required:
+#   1. GitLab's approvals.approved is true — respects approval rules.
+#   2. At least one non-bot, non-author approver has Developer or higher
+#      (access_level >= 30). approved=true with zero required approvals
+#      and an empty approved_by list does not satisfy this gate.
+forge_has_authorized_human_approval() {
+  local mr_data
+  mr_data=$(_gitlab_api GET "/projects/${REPO_ENCODED}/merge_requests/${PR_NUMBER}" 2>/dev/null) || return 1
+  [[ -n "${mr_data}" ]] || return 1
+
+  local sha author_login
+  sha=$(printf '%s' "${mr_data}" | jq -r '.sha // empty') || return 1
+  author_login=$(printf '%s' "${mr_data}" | jq -r '.author.username // empty') || return 1
+  [[ -n "${sha}" ]] || return 1
+
+  local approvals
+  approvals=$(_gitlab_api GET "/projects/${REPO_ENCODED}/merge_requests/${PR_NUMBER}/approvals" 2>/dev/null) || return 1
+  [[ -n "${approvals}" ]] || return 1
+
+  local approved
+  approved=$(printf '%s' "${approvals}" | jq -r '.approved // false') || return 1
+  if [[ "${approved}" != "true" ]]; then
+    return 1
+  fi
+
+  local candidates
+  candidates=$(printf '%s' "${approvals}" | jq -r --arg author "${author_login}" '
+    [.approved_by[]? | .user
+      | select(
+          . != null
+          and (.username // "") != ""
+          and .username != $author
+          and ((.bot // false) | not)
+          and ((.username | endswith("_bot")) | not)
+        )
+      | "\(.id)\t\(.username)"]
+    | unique[]
+  ') || return 1
+
+  [[ -n "${candidates}" ]] || return 1
+
+  # Re-fetch SHA immediately before trusting the match. Fail closed if the
+  # call errors or HEAD moved since the first read.
+  local current_sha
+  current_sha=$(_gitlab_api GET "/projects/${REPO_ENCODED}/merge_requests/${PR_NUMBER}" 2>/dev/null \
+    | jq -r '.sha // empty') || return 1
+  [[ -n "${current_sha}" ]] || return 1
+  [[ "${current_sha}" == "${sha}" ]] || return 1
+
+  local id username member access
+  while IFS=$'\t' read -r id username; do
+    [[ -n "${id}" ]] || continue
+    member=$(_gitlab_api GET "/projects/${REPO_ENCODED}/members/all/${id}" 2>/dev/null) || continue
+    access=$(printf '%s' "${member}" | jq -r '.access_level // 0') || continue
+    if [[ "${access}" =~ ^[0-9]+$ ]] && [ "${access}" -ge 30 ]; then
+      echo "Authorized human approval from ${username} (access_level=${access})"
+      return 0
+    fi
+  done <<< "${candidates}"
+
+  return 1
+}
