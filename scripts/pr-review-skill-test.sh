@@ -138,6 +138,23 @@ forbid_grep_section "skill-6d-template-not-unqualified-all-findings" "${SKILL}" 
   '^#### 6d\. Challenger pass' '^#### 6e\.' \
   'JSON array of all findings from steps 6a'
 
+# The skip rule's filtered predicate (excluding sub-agent-failure) must
+# also be reflected in the three spots that restate the dispatch
+# condition in prose, so a future edit can't revert just one of them
+# without failing CI: the 6d lead-in sentence, step 3c item 4, and the
+# dispatch-examples footnote.
+require_grep_section "skill-6d-leadin-excludes-subagent-failure" "${SKILL}" \
+  '^#### 6d\. Challenger pass' 'has not seen the orchestrator' \
+  'excluding .category: "sub-agent-failure".{0,20}findings.{0,20}is non-empty'
+
+require_grep_section "skill-3c-item4-excludes-subagent-failure" "${SKILL}" \
+  '^4\. \*\*Challenger\*\*' '^This reuses the existing scope' \
+  'produce findings excluding .category: "sub-agent-failure".'
+
+require_grep_section "skill-dispatch-footnote-excludes-subagent-failure" "${SKILL}" \
+  'Conditional — step 6d dispatches' '^#### 3c-1' \
+  'produce findings excluding.{0,3}.category: "sub-agent-failure".'
+
 # --- pre-flight reference: the protocol the issue requires ---
 
 require_grep "preflight-pipeline-is-the-review" "${PREFLIGHT}" \

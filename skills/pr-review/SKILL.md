@@ -353,8 +353,9 @@ complex PR that triggers all conditions legitimately needs all 6.
    tool calls) regardless of change size. Both assignments override the
    classification-based constraint from step 3e.
 4. **Challenger** — no re-review special case: step 6d dispatches it
-   only when the **current** review's steps 6a–6c produce findings;
-   prior findings alone do not qualify it.
+   only when the **current** review's steps 6a–6c produce findings
+   excluding `category: "sub-agent-failure"`; prior findings alone do
+   not qualify it.
 
 This reuses the existing scope constraint mechanism from step 3e — no
 new infrastructure needed. When `PRIOR_REVIEW_PROVENANCE` is not
@@ -376,8 +377,10 @@ normal scope (current behavior preserved).
 | Re-review after fix (prior findings in security only)    | correctness (full scope), security (normal scope), style-conventions (trivial scope), challenger\* |
 
 \*Conditional — step 6d dispatches the challenger only when the
-**current** review's steps 6a–6c produce findings; a re-review whose
-dispatched agents come back clean skips it like any other clean run.
+**current** review's steps 6a–6c produce findings excluding
+`category: "sub-agent-failure"`; a re-review whose dispatched agents
+come back clean (or come back only with `sub-agent-failure` findings)
+skips it like any other clean run.
 
 #### 3c-1. Security-critical file triage (large PRs)
 
@@ -941,9 +944,10 @@ and an auth bypass on the same line are two distinct findings.
 
 #### 6d. Challenger pass (dedicated sub-agent)
 
-After steps 6a–6c produce a merged finding set — and only if that set
-is non-empty (see the skip rule below) — dispatch the `challenger`
-sub-agent to adversarially challenge the findings with fresh context.
+After steps 6a–6c produce a merged finding set — and only if that set,
+**excluding `category: "sub-agent-failure"` findings**, is non-empty
+(see the skip rule below) — dispatch the `challenger` sub-agent to
+adversarially challenge the findings with fresh context.
 The challenger has not seen the orchestrator's synthesis — it receives
 only the raw findings and the diff, preserving context isolation.
 
