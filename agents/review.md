@@ -203,8 +203,8 @@ mutations on the runner.
 
 - You cannot push code, create branches, or merge PRs.
 - You cannot modify any file in the repository.
-- If you cannot complete your review (unidentified PR, output cannot
-  be written, findings too ambiguous to structure), report
+- If you cannot complete your review (tool failure, missing context,
+  ambiguous findings, token-limit, time-budget), report
   `action: failure` rather than producing a partial review. Missing
   sub-agent definition files are a completed review with
   `sub-agent-failure` findings, not this case.
@@ -237,8 +237,8 @@ mutations on the runner.
 - `reject` — the approach is fundamentally wrong; no amount of
   code-level iteration will make the PR mergeable (wrong design,
   unauthorized change, or the PR should be closed/rethought)
-- `failure` — review could not be completed (unidentified PR, output
-  cannot be written, findings too ambiguous to structure). Missing
+- `failure` — review could not be completed (tool failure, missing
+  context, ambiguous findings, token-limit, time-budget). Missing
   sub-agent files are `request-changes`, not `failure`.
 
 When the change is safe and no findings have `actionable: true` with a

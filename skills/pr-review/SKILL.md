@@ -36,7 +36,7 @@ forge-specific review skill. The orchestrator is the sole producer of
 ## Sub-agent roster
 
 Sub-agent discovery: The sub-agents' definitions are in `sub-agents/`
-relative to this file. Missing: `references/missing-sub-agents.md`.
+relative to this file. Missing files: `references/missing-sub-agents.md`.
 
 | Sub-agent              | Dispatch   | Dimensions                                                                                                              |
 |------------------------|------------|-------------------------------------------------------------------------------------------------------------------------|
@@ -728,6 +728,8 @@ prioritization.
 
 ### 4. Dispatch sub-agents
 
+Pre-flight, before dispatch: `references/missing-sub-agents.md`.
+
 For each selected **dimension** sub-agent (from step 3c — excludes
 `security-triage`, which runs in step 3c-1, and `challenger`, which
 runs in step 6d; `risk-assessment`, composed in 3c-2, is dispatched
@@ -855,8 +857,8 @@ of findings in the standard format:
 ```
 
 If a sub-agent fails to return findings (timeout, error, empty
-response, missing file), record a finding noting the gap. The
-severity depends on the sub-agent's tier:
+response, missing file — step 4's pre-flight), record a finding
+noting the gap. The severity depends on the sub-agent's tier:
 
 - **Opus-tier sub-agents** (`correctness`, `security`): record a
   **high**-severity finding. These dimensions are safety-critical —
@@ -994,8 +996,9 @@ budget section), skip the challenger: keep the merged finding set from
    are reviewing PR" template, and include everything else verbatim
 
    **Part 3 — Context package:** the merged finding set from steps
-   6a–6c (as a JSON array), plus the full PR diff and changed files
-   list. Format as:
+   6a–6c (as a JSON array, excluding `category: "sub-agent-failure"`
+   findings — re-append unchanged after step 3), plus the full PR
+   diff and changed files list. Format as:
 
    ```markdown
    ## Context

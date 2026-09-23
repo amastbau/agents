@@ -59,6 +59,31 @@ forbid_grep() {
   fi
 }
 
+# Scope a grep to the lines between (and including) a start and end
+# heading, so a match elsewhere in the file (e.g. a roster footnote)
+# cannot satisfy a check that a specific Process step does the wiring.
+section_text() {
+  local file="$1"
+  local start_pattern="$2"
+  local end_pattern="$3"
+  awk -v s="${start_pattern}" -v e="${end_pattern}" \
+    '$0 ~ s {flag=1} flag {print} flag && $0 ~ e && $0 !~ s {exit}' \
+    "${file}" | tr '\n' ' ' | tr -s ' '
+}
+
+require_grep_section() {
+  local name="$1"
+  local file="$2"
+  local start_pattern="$3"
+  local end_pattern="$4"
+  local pattern="$5"
+  if section_text "${file}" "${start_pattern}" "${end_pattern}" | grep -qE "${pattern}"; then
+    pass "${name}"
+  else
+    fail "${name}" "pattern not found between ${start_pattern} and ${end_pattern} in ${file}: ${pattern}"
+  fi
+}
+
 require_file "skill-present" "${SKILL}"
 require_file "preflight-present" "${PREFLIGHT}"
 require_file "agent-present" "${AGENT}"
@@ -69,11 +94,24 @@ require_file "code-review-present" "${CODE_REVIEW}"
 require_grep "skill-links-preflight" "${SKILL}" \
   'references/missing-sub-agents.md'
 
+# The roster line alone isn't enough — the dispatch step itself must
+# send the orchestrator to the pre-flight protocol before it composes
+# a spawn prompt, per issue #285 item 1.
+require_grep_section "skill-step4-wires-preflight" "${SKILL}" \
+  '^### 4\. Dispatch sub-agents' '^### 5\. Collect findings' \
+  'references/missing-sub-agents\.md'
+
 require_grep "skill-missing-files-step-5" "${SKILL}" \
   'Missing files: step 5'
 
 require_grep "skill-step5-covers-missing-file" "${SKILL}" \
   'empty response, missing file'
+
+require_grep "skill-step5-links-preflight" "${SKILL}" \
+  "missing file.{0,20}step 4.s pre-flight"
+
+require_grep "skill-challenger-exempts-subagent-failure" "${SKILL}" \
+  'category: "sub-agent-failure".{0,15}findings'
 
 # --- pre-flight reference: the protocol the issue requires ---
 
@@ -92,8 +130,14 @@ require_grep "preflight-category" "${PREFLIGHT}" \
 require_grep "preflight-request-changes" "${PREFLIGHT}" \
   'makes the outcome `request-changes`'
 
-require_grep "preflight-bounded-lookup" "${PREFLIGHT}" \
-  'Stop after those two lookups'
+require_grep "preflight-trusted-path-only" "${PREFLIGHT}" \
+  'Do not rediscover this path with a Glob'
+
+require_grep "preflight-excludes-pr-head" "${PREFLIGHT}" \
+  '/sandbox/workspace/pr-head/'
+
+require_grep "preflight-excludes-target-repo" "${PREFLIGHT}" \
+  '/sandbox/workspace/target-repo/'
 
 require_grep "preflight-no-approve-single-pass" "${PREFLIGHT}" \
   'Approve because a single-pass'
