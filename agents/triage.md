@@ -60,16 +60,30 @@ Separately from blocking relationships, check whether an open PR/MR already
 addresses this issue — that case is *not* a blocker, it is work in flight. See
 the Existing PR/MR gate below.
 
-**Existing PR/MR gate (HARD CONSTRAINT):** If an open PR/MR already addresses this issue — even partially — do not emit `action: "sufficient"`; dispatching a second implementation would create duplicates. Distinguish between two cases:
+**Implementing-PR search (HARD CONSTRAINT, every run including re-triage):** Same-repo listings miss PRs that live in a sibling repository in the same org/group and are never named in the issue. Before applying the Existing PR/MR gate, run the forge skill recipes for:
 
-- **PR/MR fixes the issue** — the PR/MR directly resolves the reported problem. Use `action: "in-progress"` with the PR/MR URL(s) in the `pull_requests` array. This signals that work is already underway, not that the issue is blocked.
+1. Linked PRs/MRs (`closedByPullRequestsReferences` on GitHub, `related_merge_requests` / `closed_by` on GitLab). These include cross-repo closing references (`Closes OWNER/REPO#N`) when the forge has linked them.
+2. Org/group search for `OWNER/REPO#N` (and `Closes`/`Fixes` forms). Run this even when the issue never names another repository.
+3. Branch names that embed the issue number (`agent/{N}-*`, `feat/{N}-*`).
+
+Then fetch each candidate's **current** state, CI/pipeline status, and review status. Re-check state immediately before writing the result:
+
+- Open or draft and it addresses the issue → Existing PR/MR gate.
+- Closed without merging, including if it closed after the search step → abandoned, not in-flight. Do not emit `in-progress` for it and do not error. Continue with the action you would otherwise choose.
+- Merged → completion evidence (step 2d).
+
+If org/group search fails, record that in `reasoning` as an information gap rather than concluding no implementing PR exists.
+
+**Existing PR/MR gate (HARD CONSTRAINT):** If an open PR/MR already addresses this issue — even partially, and even if it lives in another org/group repository that the issue never names — do not emit `action: "sufficient"`; dispatching a second implementation would create duplicates. A `/fs-triage` request to check relevance and leave the issue for human prioritization does not override this gate: emit `in-progress`, not `sufficient` with a withhold. Distinguish between two cases:
+
+- **PR/MR fixes the issue** — the PR/MR directly resolves the reported problem. Use `action: "in-progress"` with the PR/MR URL(s) in the `pull_requests` array. This signals that work is already underway, not that the issue is blocked. The `comment` MUST name each PR/MR by number or title (not the URL — the post-script appends URLs) and MUST state its CI/pipeline status (passing, failing, pending, or no checks) and review status (approved, changes requested, or pending) so a human doing prioritization can see the in-flight work.
 - **PR/MR is a true prerequisite** — the PR/MR covers infrastructure, API, or design changes that must land before this issue can be worked on, but does not itself fix the issue. Use `action: "prerequisites"` with the PR/MR URL in the `existing` array.
 
 A PR/MR that closes or fixes the issue (e.g., via a `Fixes #N`/`Closes #N` reference, or by directly resolving the reported problem even if some polish remains) is `in-progress` regardless of how much polish is left — `in-progress` already supports listing multiple related PRs/MRs, so there is no need to split a single fix into an `in-progress` part and a `prerequisites` part. Reserve `prerequisites` for PRs/MRs that you have positively determined do not resolve the issue. If you are genuinely unsure which bucket a PR/MR belongs in, use `in-progress` and state the uncertainty in `comment` — `in-progress` is the safe default in both directions, because it neither dispatches a second implementation nor tells the reporter their issue is blocked when it is actually being fixed. If both a fixing PR/MR and a separate, unrelated blocking PR/MR or prerequisite issue exist, use `in-progress` (the primary signal) and mention the other blocker in `comment` rather than also populating `prerequisites`. A **draft** PR/MR is evaluated the same way — draft status does not by itself change the action, but call it out in `comment` (not `reasoning`, which is internal and never shown to maintainers) so they know it may need more time before it's ready for review.
 
 Only skip this rule if the PR/MR is closed without merging (the work was abandoned) or if the PR/MR is clearly unrelated despite mentioning the issue number.
 
-If the issue mentions other repositories, libraries, or upstream projects, use your forge skill to search those too.
+Also search any repositories, libraries, or upstream projects the issue names that sit outside the org/group — the org/group search does not cover those.
 
 If a cross-repo search fails or returns an error (e.g., due to access restrictions), note this in your reasoning as an information gap rather than concluding no blocking work exists.
 
@@ -174,7 +188,7 @@ Calculate overall clarity: `symptom*0.35 + cause*0.30 + reproduction*0.20 + impa
 
 **Anti-premature-prerequisites rule (HARD CONSTRAINT):** If your assessment identifies unresolved prerequisites — dependencies on work in other repos or unmerged changes that must land first — you MUST use `action: "prerequisites"`. Do NOT emit `action: "sufficient"` when prerequisites exist. The `sufficient` action means there are zero blockers and zero open questions. Exception: if a fixing PR is also open for this issue, use `in-progress` instead and mention the additional blocker in `comment`, per the Existing PR gate's fixing-PR-plus-separate-blocker guidance in Step 2b.
 
-**Anti-premature-in-progress rule (HARD CONSTRAINT):** If an open PR already addresses this issue, you MUST use `action: "in-progress"` (or `action: "prerequisites"` only if you have positively determined the PR is a true prerequisite rather than a fix; if you are unsure, use `in-progress` — see the Existing PR gate in Step 2b) — this takes priority over the anti-premature-resolution and anti-premature-prerequisites rules above even if user-facing gaps or a separate blocker also remain, since a fixing PR already in flight means there is no new implementation to gather information for or block; note any remaining gaps or the other blocker in `comment` instead of switching to `insufficient` or `prerequisites`. Do NOT emit `action: "sufficient"` when a fixing PR is already open — dispatching a second implementation would create duplicates.
+**Anti-premature-in-progress rule (HARD CONSTRAINT):** If an open PR already addresses this issue — including a PR in another org/group repository that the issue never names — you MUST use `action: "in-progress"` (or `action: "prerequisites"` only if you have positively determined the PR is a true prerequisite rather than a fix; if you are unsure, use `in-progress` — see the Existing PR gate in Step 2b) — this takes priority over the anti-premature-resolution and anti-premature-prerequisites rules above even if user-facing gaps or a separate blocker also remain, since a fixing PR already in flight means there is no new implementation to gather information for or block; note any remaining gaps or the other blocker in `comment` instead of switching to `insufficient` or `prerequisites`. A request to leave the issue for human prioritization does not change the action. Do NOT emit `action: "sufficient"` when a fixing PR is already open — dispatching a second implementation would create duplicates.
 
 **Anti-question-bypass rule (HARD CONSTRAINT):** If the issue uses interrogative phrasing and describes no concrete defect, missing feature, or requested change, you MUST use `action: "question"`. Do NOT emit `action: "sufficient"` or `action: "insufficient"` for issues that are purely asking for information. The fact that answering a question might reveal an actionable improvement does not change the classification — the reporter asked a question, not filed a bug or feature request. Answer the question using the `question` action and let the reporter decide whether to convert it into actionable work.
 
@@ -363,7 +377,7 @@ Each sub-issue must have a clear, self-contained title and body. Write sub-issue
 
 ### Action: `in-progress`
 
-An open PR already addresses this issue. The work is in flight — the issue is not blocked, it is being resolved. Use this instead of `prerequisites` when the PR directly fixes the reported problem. If every addressing PR/MR is already merged and the described work is finished, use `completed` instead.
+An open PR already addresses this issue. The work is in flight — the issue is not blocked, it is being resolved. Use this instead of `prerequisites` when the PR directly fixes the reported problem. If every addressing PR/MR is already merged and the described work is finished, use `completed` instead. If a candidate PR/MR is closed without merging when you re-check its state, it is abandoned — do not emit this action for it.
 
 ```json
 {
@@ -373,7 +387,7 @@ An open PR already addresses this issue. The work is in flight — the issue is 
     { "url": "https://github.com/org/repo/pull/123" },
     { "url": "https://gitlab.com/group/project/-/merge_requests/45" }
   ],
-  "comment": "A professional comment explaining that existing work is already addressing this issue. Summarize what the PR(s) cover — do not include the PR URLs yourself, the post-script appends an 'Addressed by:' list automatically. Do not use 'blocked' framing — the issue is being resolved, not blocked."
+  "comment": "A professional comment explaining that existing work is already addressing this issue. Name each PR/MR by number or title and state its current CI/pipeline status (passing, failing, pending, or no checks) and review status (approved, changes requested, or pending). Summarize what the PR(s) cover — do not include the PR URLs yourself, the post-script appends an 'Addressed by:' list automatically. Do not use 'blocked' framing — the issue is being resolved, not blocked."
 }
 ```
 
