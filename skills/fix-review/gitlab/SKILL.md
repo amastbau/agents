@@ -103,6 +103,14 @@ curl -K "$CURLRC" \
   "https://${GITLAB_HOST}/api/v4/projects/${REPO_ENCODED}/pipelines/${PIPELINE_ID}/jobs?per_page=100"
 ```
 
+Then, as its own Bash call — whether the fetches above succeeded, failed,
+or timed out — scrub the token: `: > /tmp/gitlab-ci.curlrc`. Do this
+regardless of whether any job later fails: a green pipeline, or a flow that
+ends before reaching the trace/artifact block below, must not leave the
+token resident in `/tmp` for the rest of the sandbox session. The
+trace/artifact block below writes its own copy of the same file when it
+runs and scrubs it again afterward.
+
 **Exclude Fullsend agent/dispatch jobs** before diagnosing failures. Drop a
 job when its `name` or `stage` contains `fullsend` (case-insensitive) or the
 name starts with `dispatch-`. Do not add excluded jobs to `ci_inspections`.
