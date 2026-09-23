@@ -90,6 +90,33 @@ _candidate_url_is_public() {
   [[ "$(_candidate_url_visibility "$1")" == "public" ]]
 }
 
+# Strips literal occurrences of a withheld candidate URL from freeform text.
+#
+# _candidate_url_is_public (and the agent's own `redacted` flag) only gate
+# whether a URL reaches the automated "Blocked by:"/"Addressed by:" footer.
+# The agent-authored `comment` field is a separate, untrusted channel:
+# agents/triage.md instructs the agent not to name a withheld candidate's
+# repo/title/URL there, but that's a prompt instruction, not an enforced
+# boundary, and the fetched PR/MR content that informs `comment` is itself
+# untrusted input. Call this for every withheld URL before the comment is
+# posted so a withheld identity can't leak through prose that echoes it.
+#
+# Escaping matches the sed-based marker-escaping used elsewhere in this
+# codebase (e.g. gitlab-triage-ops.lib.sh's sticky-comment stripping):
+# escape basic-regex metacharacters, then escape "/" since sed uses it as
+# the delimiter.
+_redact_url_from_text() {
+  local text="$1"
+  local url="$2"
+  if [[ -z "${url}" ]]; then
+    printf '%s' "${text}"
+    return
+  fi
+  local escaped_url
+  escaped_url=$(printf '%s' "${url}" | sed 's/[].[*^$()+?{|\\]/\\&/g; s|/|\\/|g')
+  printf '%s' "${text}" | sed "s/${escaped_url}/[link withheld]/g"
+}
+
 FULLSEND_TRACKER="${FULLSEND_TRACKER:-${FULLSEND_FORGE:-}}"
 
 case "${FULLSEND_TRACKER:-}" in

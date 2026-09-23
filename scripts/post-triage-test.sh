@@ -396,6 +396,21 @@ run_test_not_contains "prerequisites-all-redacted-never-logs-url" \
   '{"action":"prerequisites","reasoning":"needs an upstream fix from a private repo","prerequisites":{"existing":[{"url":"https://github.com/other-org/private-sibling/issues/3","redacted":true}],"create":[]},"comment":"This issue is blocked on an upstream dependency."}' \
   "private-sibling"
 
+# [data-exposure] review finding: the withhold instruction in
+# agents/triage.md only tells the agent not to name a withheld candidate in
+# `comment` — it is not enforced. An agent that ignores it and names the
+# redacted URL in `comment` anyway must still not leak it, since the footer
+# guard above only protects the automated "Blocked by:" list, not prose.
+run_test_not_contains "prerequisites-redacted-url-in-comment-scrubbed" \
+  '{"action":"prerequisites","reasoning":"needs upstream fix from a private repo the agent named in comment anyway","prerequisites":{"existing":[{"url":"https://github.com/other-org/private-sibling/issues/3","redacted":true}],"create":[]},"comment":"This issue is blocked on https://github.com/other-org/private-sibling/issues/3."}' \
+  "private-sibling"
+
+# Same leak, but via the fail-closed server-side check rather than the
+# agent's own "redacted" flag.
+run_test_not_contains "prerequisites-unmarked-private-url-in-comment-scrubbed" \
+  '{"action":"prerequisites","reasoning":"needs upstream fix from a private repo the agent forgot to mark redacted and named in comment","prerequisites":{"existing":[{"url":"https://github.com/other-org/private-sibling/issues/3"}],"create":[]},"comment":"This issue is blocked on https://github.com/other-org/private-sibling/issues/3."}' \
+  "private-sibling"
+
 # Fail-closed server-side check (the [fail-open] review finding): an agent
 # that finds a private-repo blocker but does not set "redacted" must not
 # leak the URL. The mock gh treats any "private-sibling" repo path as
@@ -485,6 +500,22 @@ run_test "in-progress-all-redacted-uses-generic-footer" \
 
 run_test_not_contains "in-progress-all-redacted-never-logs-url" \
   '{"action":"in-progress","reasoning":"A PR in a private sibling repo fixes this","pull_requests":[{"url":"https://github.com/test-org/private-sibling/pull/7","redacted":true}],"comment":"Work already in progress elsewhere is already addressing this issue."}' \
+  "private-sibling"
+
+# [data-exposure] review finding: the withhold instruction in
+# agents/triage.md only tells the agent not to name a withheld candidate in
+# `comment` — it is not enforced. An agent that ignores it and names the
+# redacted PR URL in `comment` anyway must still not leak it, since the
+# footer guard above only protects the automated "Addressed by:" list, not
+# prose.
+run_test_not_contains "in-progress-redacted-pr-url-in-comment-scrubbed" \
+  '{"action":"in-progress","reasoning":"A PR in a private sibling repo fixes this and the agent named it in comment anyway","pull_requests":[{"url":"https://github.com/test-org/private-sibling/pull/7","redacted":true}],"comment":"Work already in progress at https://github.com/test-org/private-sibling/pull/7 is already addressing this issue."}' \
+  "private-sibling"
+
+# Same leak, but via the fail-closed server-side check rather than the
+# agent's own "redacted" flag.
+run_test_not_contains "in-progress-unmarked-private-pr-url-in-comment-scrubbed" \
+  '{"action":"in-progress","reasoning":"A PR in a private sibling repo the agent forgot to mark redacted and named in comment fixes this","pull_requests":[{"url":"https://github.com/test-org/private-sibling/pull/7"}],"comment":"Work already in progress at https://github.com/test-org/private-sibling/pull/7 is already addressing this issue."}' \
   "private-sibling"
 
 # Fail-closed server-side check (the [fail-open] review finding): an agent

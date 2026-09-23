@@ -238,15 +238,20 @@ ${ISSUE_BODY}
     EXISTING_URLS=""
     REDACTED_EXISTING_COUNT=0
     for i in $(seq 0 $((EXISTING_COUNT - 1))); do
+      URL=$(jq -r ".prerequisites.existing[${i}].url" "${RESULT_FILE}")
       IS_REDACTED=$(jq -r ".prerequisites.existing[${i}].redacted // false" "${RESULT_FILE}")
       if [[ "${IS_REDACTED}" == "true" ]]; then
         REDACTED_EXISTING_COUNT=$((REDACTED_EXISTING_COUNT + 1))
+        # Belt-and-suspenders: the agent flagged this one itself, but it may
+        # still have named the URL in `comment` despite the withhold
+        # instruction (see _redact_url_from_text).
+        COMMENT="$(_redact_url_from_text "${COMMENT}" "${URL}")"
         continue
       fi
-      URL=$(jq -r ".prerequisites.existing[${i}].url" "${RESULT_FILE}")
       if ! _candidate_url_is_public "${URL}"; then
         echo "::warning::Server-side visibility check withheld a prerequisite URL the agent did not mark redacted"
         REDACTED_EXISTING_COUNT=$((REDACTED_EXISTING_COUNT + 1))
+        COMMENT="$(_redact_url_from_text "${COMMENT}" "${URL}")"
         continue
       fi
       EXISTING_URLS="${EXISTING_URLS} ${URL}"
@@ -326,15 +331,20 @@ ${FAILED_CREATES}"
     PR_LIST=""
     REDACTED_PR_COUNT=0
     for i in $(seq 0 $((PR_COUNT - 1))); do
+      URL=$(jq -er ".pull_requests[${i}].url" "${RESULT_FILE}")
       IS_REDACTED=$(jq -r ".pull_requests[${i}].redacted // false" "${RESULT_FILE}")
       if [[ "${IS_REDACTED}" == "true" ]]; then
         REDACTED_PR_COUNT=$((REDACTED_PR_COUNT + 1))
+        # Belt-and-suspenders: the agent flagged this one itself, but it may
+        # still have named the URL in `comment` despite the withhold
+        # instruction (see _redact_url_from_text).
+        COMMENT="$(_redact_url_from_text "${COMMENT}" "${URL}")"
         continue
       fi
-      URL=$(jq -er ".pull_requests[${i}].url" "${RESULT_FILE}")
       if ! _candidate_url_is_public "${URL}"; then
         echo "::warning::Server-side visibility check withheld a pull request URL the agent did not mark redacted"
         REDACTED_PR_COUNT=$((REDACTED_PR_COUNT + 1))
+        COMMENT="$(_redact_url_from_text "${COMMENT}" "${URL}")"
         continue
       fi
       PR_LIST="${PR_LIST}

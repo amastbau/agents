@@ -119,6 +119,33 @@ _candidate_url_is_public() {
   [[ "$(_candidate_url_visibility "$1")" == "public" ]]
 }
 
+# Strips literal occurrences of a withheld candidate URL from freeform text.
+#
+# _candidate_url_is_public (and the agent's own `redacted` flag) only gate
+# whether a URL reaches the automated "Blocked by:"/"Addressed by:" footer.
+# The agent-authored `comment` field is a separate, untrusted channel:
+# agents/triage.md instructs the agent not to name a withheld candidate's
+# repo/title/URL there, but that's a prompt instruction, not an enforced
+# boundary, and the fetched PR/MR content that informs `comment` is itself
+# untrusted input. Call this for every withheld URL before the comment is
+# posted so a withheld identity can't leak through prose that echoes it.
+#
+# Escaping matches the sed-based marker-escaping used elsewhere in this
+# codebase (e.g. gitlab-triage-ops.lib.sh's sticky-comment stripping):
+# escape basic-regex metacharacters, then escape "/" since sed uses it as
+# the delimiter.
+_redact_url_from_text() {
+  local text="$1"
+  local url="$2"
+  if [[ -z "${url}" ]]; then
+    printf '%s' "${text}"
+    return
+  fi
+  local escaped_url
+  escaped_url=$(printf '%s' "${url}" | sed 's/[].[*^$()+?{|\\]/\\&/g; s|/|\\/|g')
+  printf '%s' "${text}" | sed "s/${escaped_url}/[link withheld]/g"
+}
+
 FULLSEND_TRACKER="${FULLSEND_TRACKER:-${FULLSEND_FORGE:-}}"
 
 case "${FULLSEND_TRACKER:-}" in
@@ -1269,15 +1296,20 @@ ${ISSUE_BODY}
     EXISTING_URLS=""
     REDACTED_EXISTING_COUNT=0
     for i in $(seq 0 $((EXISTING_COUNT - 1))); do
+      URL=$(jq -r ".prerequisites.existing[${i}].url" "${RESULT_FILE}")
       IS_REDACTED=$(jq -r ".prerequisites.existing[${i}].redacted // false" "${RESULT_FILE}")
       if [[ "${IS_REDACTED}" == "true" ]]; then
         REDACTED_EXISTING_COUNT=$((REDACTED_EXISTING_COUNT + 1))
+        # Belt-and-suspenders: the agent flagged this one itself, but it may
+        # still have named the URL in `comment` despite the withhold
+        # instruction (see _redact_url_from_text).
+        COMMENT="$(_redact_url_from_text "${COMMENT}" "${URL}")"
         continue
       fi
-      URL=$(jq -r ".prerequisites.existing[${i}].url" "${RESULT_FILE}")
       if ! _candidate_url_is_public "${URL}"; then
         echo "::warning::Server-side visibility check withheld a prerequisite URL the agent did not mark redacted"
         REDACTED_EXISTING_COUNT=$((REDACTED_EXISTING_COUNT + 1))
+        COMMENT="$(_redact_url_from_text "${COMMENT}" "${URL}")"
         continue
       fi
       EXISTING_URLS="${EXISTING_URLS} ${URL}"
@@ -1357,15 +1389,20 @@ ${FAILED_CREATES}"
     PR_LIST=""
     REDACTED_PR_COUNT=0
     for i in $(seq 0 $((PR_COUNT - 1))); do
+      URL=$(jq -er ".pull_requests[${i}].url" "${RESULT_FILE}")
       IS_REDACTED=$(jq -r ".pull_requests[${i}].redacted // false" "${RESULT_FILE}")
       if [[ "${IS_REDACTED}" == "true" ]]; then
         REDACTED_PR_COUNT=$((REDACTED_PR_COUNT + 1))
+        # Belt-and-suspenders: the agent flagged this one itself, but it may
+        # still have named the URL in `comment` despite the withhold
+        # instruction (see _redact_url_from_text).
+        COMMENT="$(_redact_url_from_text "${COMMENT}" "${URL}")"
         continue
       fi
-      URL=$(jq -er ".pull_requests[${i}].url" "${RESULT_FILE}")
       if ! _candidate_url_is_public "${URL}"; then
         echo "::warning::Server-side visibility check withheld a pull request URL the agent did not mark redacted"
         REDACTED_PR_COUNT=$((REDACTED_PR_COUNT + 1))
+        COMMENT="$(_redact_url_from_text "${COMMENT}" "${URL}")"
         continue
       fi
       PR_LIST="${PR_LIST}
