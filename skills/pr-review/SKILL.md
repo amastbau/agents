@@ -667,13 +667,13 @@ sub-agents must honor — it overrides their default exploration budget.
 | Small non-mechanical (under 20 changed lines, structural) | `"small: ≤15 tool calls. Read the diff, linked issue, and up to 3 context files directly relevant to the change."` |
 | Standard / large | `"none"` (sub-agent uses its own exploration budget) |
 
-**Path-pattern override:** Before assigning `trivial` or `small`, match
-changed paths against step 3c-1's patterns (`.github/**`, `.claude/**`,
-`.pi/**`, `agents/**`, `scripts/**`, `**/auth/**`, `**/mint/**`,
-`**/token/**`). A match sets `security` to `"none"`. Set `correctness`
-to `"none"` only if the diff also adds error-handling or control-flow
-(new catch, fail-closed/fail-open, or new branch). Other sub-agents
-keep the table.
+**Path-pattern override:** Before assigning `trivial` or `small`,
+resolve governance paths per 3c-1 step 2, unioned with
+`sub-agents/security-triage.md`'s "Path patterns" section. A match
+sets `security`'s `scope_constraint` to `"none"`. Set `correctness`'s
+`scope_constraint` to `"none"` only if it also adds error-handling or
+control-flow (new catch, fail-closed/fail-open, or new branch). Other
+sub-agents keep the table's classification-based scope constraint.
 
 **Re-review override:** When the re-review dispatch rule (step 3c)
 assigns a scope to an always-included dimension — a `trivial` constraint
