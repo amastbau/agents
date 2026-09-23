@@ -1,0 +1,69 @@
+# Missing sub-agent definition files
+
+The sub-agent pipeline is the review. When a selected dimension
+sub-agent cannot be dispatched because its definition file is missing
+or unreadable, that is a review finding — not a reason to evaluate the
+diff yourself or to switch to the `code-review` skill.
+
+This protocol applies to step 4 dimension sub-agents (from step 3c).
+Steps 3c-1 (`security-triage`), 3c-2 (`risk-assessment`), and 6d
+(`challenger`) keep the fallbacks already written in those steps.
+
+## Pre-flight
+
+Before composing any step 4 spawn prompt:
+
+1. Resolve this skill's directory. Definitions live in `sub-agents/`
+   next to `pr-review/SKILL.md`. If the absolute path is unknown,
+   Glob `**/pr-review/SKILL.md` once, then if needed `find` `/sandbox`
+   for `*/pr-review/SKILL.md`. Stop after those two lookups. Do not
+   search the rest of the filesystem.
+2. For each selected dimension sub-agent, confirm
+   `<skill-dir>/sub-agents/<name>.md` exists and is readable.
+3. Dispatch the files that exist. Do not invent a prompt for a missing
+   file.
+
+If the skill directory cannot be located at all, treat every selected
+dimension sub-agent as missing.
+
+## Record the gap
+
+For each selected dimension sub-agent that was not dispatched, record
+a finding in step 5:
+
+- **Opus-tier** (`correctness`, `security`): **high** severity. These
+  dimensions are safety-critical — an approval that skipped them is
+  worse than no review at all. A high finding forces `request-changes`
+  (step 6f).
+- **Sonnet-tier** (`intent-coherence`, `style-conventions`,
+  `docs-currency`, `cross-repo-contracts`): **info** severity.
+
+```json
+{
+  "severity": "high|info",
+  "category": "sub-agent-failure",
+  "file": "N/A",
+  "description": "The <dimension> sub-agent did not return findings: definition file missing or unreadable at <path>",
+  "actionable": false
+}
+```
+
+The same shape is used for timeout, error, or empty response after a
+successful dispatch. Missing files are the "not dispatched" case of
+that protocol, not a different category.
+
+## Outcome
+
+Continue to synthesis (step 6) and produce a structured result
+(step 7). Do not emit `action: failure` for missing definition files —
+that reason is for an unidentified PR, output that cannot be written,
+token-limit size, or time-budget. A high `sub-agent-failure` finding
+makes the outcome `request-changes`. The review body must name which
+sub-agents could not run and why.
+
+Do not:
+
+- Switch to the `code-review` skill
+- Evaluate the diff as the orchestrator in place of the missing
+  sub-agents
+- Approve because a single-pass reading of the diff looked clean

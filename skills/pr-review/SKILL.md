@@ -36,7 +36,7 @@ forge-specific review skill. The orchestrator is the sole producer of
 ## Sub-agent roster
 
 Sub-agent discovery: The sub-agents' definitions are in `sub-agents/`
-relative to this file.
+relative to this file. Missing: `references/missing-sub-agents.md`.
 
 | Sub-agent              | Dispatch   | Dimensions                                                                                                              |
 |------------------------|------------|-------------------------------------------------------------------------------------------------------------------------|
@@ -855,8 +855,8 @@ of findings in the standard format:
 ```
 
 If a sub-agent fails to return findings (timeout, error, empty
-response), record a finding noting the gap. The severity depends on
-the sub-agent's tier:
+response, missing file), record a finding noting the gap. The
+severity depends on the sub-agent's tier:
 
 - **Opus-tier sub-agents** (`correctness`, `security`): record a
   **high**-severity finding. These dimensions are safety-critical —
@@ -1404,9 +1404,8 @@ wins.
 - **The orchestrator is the sole producer of `agent-result.json`.** No
   sub-agent writes this file.
 - **Report failure rather than posting a partial review.** If you cannot
-  complete the review (tool failure, missing context, all sub-agents
-  failed), produce a failure result (see step 7) rather than posting
-  an incomplete result.
+  complete the review, produce a failure result (see step 7). Missing
+  files: step 5.
 - **Write a result before the budget runs out.** A kill at
   `timeout_minutes` posts nothing; a `failure` result with `reason`
   `time-budget` written in time is posted as a notice (Time budget).
