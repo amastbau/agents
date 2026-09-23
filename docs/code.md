@@ -247,8 +247,9 @@ vars. Key differences from single-forge setup:
   via `env.runner`. Do not re-add `GH_TOKEN` to `env.sandbox` or to
   `expand: true` host files. Verified by
   `scripts/sandbox-credential-boundary-test.sh`
-  (`skill-github-forge-uses-authorization-placeholder` plus the
-  env.sandbox / host_files denylist).
+  (`skill-github-forge-documents-authorization-rewrite` for the
+  Authorization/OpenShell wording, `skill-github-forge-uses-authorization-placeholder`
+  for the `gh` + `GH_TOKEN` usage, plus the env.sandbox / host_files denylist).
 - **GitLab credentials use provider-backed delivery** — the GitLab
   overlay attaches the `gitlab-code` provider and `fullsend-gitlab-code`
   OpenShell profile. Sandbox curl commands use

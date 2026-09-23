@@ -204,7 +204,7 @@ for skill_file in "${GITHUB_SKILL_FILES[@]}"; do
 
   test_name="skill-${skill_name}-no-unverified-token-header"
   if grep -qF 'PRIVATE-TOKEN' "${skill_file}" ||
-    grep -qE -- '--header[^$]*GH_TOKEN' "${skill_file}"; then
+    grep -E -- '(-H|--header)' "${skill_file}" | grep -qF 'GH_TOKEN'; then
     assert_fail "${test_name}" "GH_TOKEN must not be passed via a custom header; gh sends Authorization"
   else
     assert_pass "${test_name}"
