@@ -162,6 +162,30 @@ CURRENT_BASE_FILE_COUNT=$(jq '.changes | length' /sandbox/workspace/mr-changes.j
 echo "CURRENT_BASE_FILE_COUNT=$CURRENT_BASE_FILE_COUNT"
 ```
 
+## Base ref stability (rebase-only)
+
+Identical trees say nothing about whether the MR was retargeted to a
+different target branch. GitLab logs a retarget as a system note
+("changed target branch from ..."); an MR with no such note has had
+the same target branch since it was opened.
+
+```bash
+BASE_REF_CHANGE_COUNT=$(curl --fail --silent --show-error \
+  --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+  "https://${GITLAB_HOST}/api/v4/projects/${REPO_ENCODED}/merge_requests/${MR_IID}/notes?per_page=100" \
+  | jq '[.[] | select(.system == true and (.body | test("changed target branch")))] | length')
+echo "BASE_REF_CHANGE_COUNT=$BASE_REF_CHANGE_COUNT"
+if test "$BASE_REF_CHANGE_COUNT" = "0"; then
+  echo "BASE_REF_STABLE=true"
+else
+  echo "BASE_REF_STABLE=false"
+fi
+```
+
+A non-zero curl exit, pagination beyond 100 notes, or an empty
+`$BASE_REF_CHANGE_COUNT` means the check is inconclusive — treat that
+the same as `BASE_REF_STABLE=false`.
+
 ## Notes
 
 - The sandbox policy allows `curl` but not `gh` for GitLab forges.

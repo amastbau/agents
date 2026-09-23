@@ -139,6 +139,27 @@ CURRENT_BASE_FILE_COUNT=$(jq 'length' /sandbox/workspace/pr-files.json)
 echo "CURRENT_BASE_FILE_COUNT=$CURRENT_BASE_FILE_COUNT"
 ```
 
+## Base ref stability (rebase-only)
+
+Identical trees say nothing about whether the PR was retargeted to a
+different base. The Issue Events API records a `base_ref_changed`
+event for every retarget; a PR with no such event has had the same
+base ref since it was opened.
+
+```bash
+BASE_REF_CHANGE_COUNT=$(gh api --paginate "repos/${REPO_FULL_NAME}/issues/${PR_NUMBER}/events" \
+  --jq '[.[] | select(.event == "base_ref_changed")] | length')
+echo "BASE_REF_CHANGE_COUNT=$BASE_REF_CHANGE_COUNT"
+if test "$BASE_REF_CHANGE_COUNT" = "0"; then
+  echo "BASE_REF_STABLE=true"
+else
+  echo "BASE_REF_STABLE=false"
+fi
+```
+
+A non-zero exit or an empty `$BASE_REF_CHANGE_COUNT` means the check is
+inconclusive — treat that the same as `BASE_REF_STABLE=false`.
+
 ## Interactive mode (non-pipeline)
 
 ```bash

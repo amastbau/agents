@@ -212,7 +212,8 @@ all files as changed — no anchoring.
 
 #### 2a-1. Rebase-only short-circuit
 
-[rebase-short-circuit.md](references/rebase-short-circuit.md)
+Read `references/rebase-short-circuit.md` for the short-circuit
+conditions.
 
 ### 3. Triage
 
