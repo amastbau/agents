@@ -655,11 +655,52 @@ if [[ "\${URL}" == *"/members/all/"* ]]; then
   exit 0
 fi
 
-# GET /merge_requests/:iid → MR metadata
+# GET /repository/commits/:sha → commit metadata (HEAD push timestamp)
+if [[ "\${URL}" == *"/repository/commits/"* ]]; then
+  if [[ -n "\${MOCK_MR_COMMIT_FAIL:-}" ]]; then
+    echo "mock curl commit failure" >&2
+    exit 1
+  fi
+  echo "\${MOCK_MR_COMMIT_JSON:-{\"committed_date\":\"2024-01-01T00:00:00.000Z\"}}"
+  exit 0
+fi
+
+# GET /merge_requests/:iid/notes → discussion notes (approval system notes)
+if [[ "\${URL}" == *"/merge_requests/"* ]] && [[ "\${URL}" == *"/notes"* ]]; then
+  if [[ -n "\${MOCK_MR_NOTES_FAIL:-}" ]]; then
+    echo "mock curl notes failure" >&2
+    exit 1
+  fi
+  if [[ -n "\${MOCK_MR_NOTES_JSON:-}" ]]; then
+    echo "\${MOCK_MR_NOTES_JSON}"
+  else
+    NOTE_AUTHOR="\${MOCK_MR_NOTE_AUTHOR:-alice}"
+    printf '[{"system":true,"body":"approved this merge request","author":{"username":"%s"},"created_at":"2024-06-01T00:00:00.000Z"}]\n' "\${NOTE_AUTHOR}"
+  fi
+  exit 0
+fi
+
+# GET /merge_requests/:iid → MR metadata. Called once from forge_get_pr_info
+# up front, then twice more inside forge_has_authorized_human_approval (the
+# initial read and the TOCTOU re-fetch) — a call counter lets the mock
+# simulate the HEAD SHA moving between those last two reads.
 if [[ "\${URL}" == *"/merge_requests/"* ]] && [[ "\${URL}" != *"/notes"* ]] && [[ "\${URL}" != *"/changes"* ]] && [[ "\${URL}" != *"/labels"* ]] && [[ "\${URL}" != *"/approvals"* ]]; then
+  COUNT_FILE=".gitlab-mr-fetch-count"
+  MR_FETCH_COUNT=0
+  [[ -f "\${COUNT_FILE}" ]] && MR_FETCH_COUNT="\$(cat "\${COUNT_FILE}")"
+  MR_FETCH_COUNT=\$((MR_FETCH_COUNT + 1))
+  echo "\${MR_FETCH_COUNT}" > "\${COUNT_FILE}"
+
   DRAFT="\${MOCK_MR_IS_DRAFT:-false}"
   AUTHOR="\${MOCK_MR_AUTHOR:-testuser}"
   SHA="\${MOCK_MR_SHA:-abc123}"
+  if [[ "\${MR_FETCH_COUNT}" -ge 3 ]]; then
+    if [[ -n "\${MOCK_MR_REFETCH_FAIL:-}" ]]; then
+      echo "mock curl mr refetch failure" >&2
+      exit 1
+    fi
+    SHA="\${MOCK_MR_SHA_REFETCH:-\${SHA}}"
+  fi
   printf '{"state":"opened","draft":%s,"author":{"username":"%s"},"iid":99,"sha":"%s"}\n' "\${DRAFT}" "\${AUTHOR}" "\${SHA}"
   exit 0
 fi
@@ -2284,6 +2325,44 @@ run_gitlab_human_approval_test "gitlab-human-approval-guest-access" \
 run_gitlab_human_approval_test "gitlab-human-approval-api-fail-closed" \
   "No authorized human approval on current HEAD" \
   "MOCK_MR_APPROVALS_FAIL=1"
+
+# Approval note predates the current HEAD's push — the scenario the
+# MR-level approved_by flag misses when a project disables
+# reset_approvals_on_push: approved=true and approved_by persist across
+# pushes, but the human never saw this commit. Analogous to GitHub's
+# human-approval-stale-sha-manual-review.
+run_gitlab_human_approval_test "gitlab-human-approval-stale-approval-manual-review" \
+  "No authorized human approval on current HEAD" \
+  "MOCK_MR_APPROVALS_JSON=${GITLAB_APPROVED_JSON}" \
+  "MOCK_MR_ACCESS_LEVEL=40" \
+  "MOCK_MR_COMMIT_JSON={\"committed_date\":\"2024-12-01T00:00:00.000Z\"}"
+
+# PR author approving their own MR does not count
+run_gitlab_human_approval_test "gitlab-human-approval-self-approve-manual-review" \
+  "No authorized human approval on current HEAD" \
+  "MOCK_MR_APPROVALS_JSON=${GITLAB_APPROVED_JSON}" \
+  "MOCK_MR_ACCESS_LEVEL=40" \
+  "MOCK_MR_AUTHOR=alice"
+
+# Member-permission lookup failure → fail closed
+run_gitlab_human_approval_test "gitlab-human-approval-member-permission-fail-closed" \
+  "No authorized human approval on current HEAD" \
+  "MOCK_MR_APPROVALS_JSON=${GITLAB_APPROVED_JSON}" \
+  "MOCK_MR_MEMBER_FAIL=1"
+
+# HEAD SHA changes between the initial read and the TOCTOU re-fetch → fail closed
+run_gitlab_human_approval_test "gitlab-human-approval-sha-moved-manual-review" \
+  "No authorized human approval on current HEAD" \
+  "MOCK_MR_APPROVALS_JSON=${GITLAB_APPROVED_JSON}" \
+  "MOCK_MR_ACCESS_LEVEL=40" \
+  "MOCK_MR_SHA_REFETCH=deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+
+# TOCTOU re-fetch API failure → fail closed (not fail open)
+run_gitlab_human_approval_test "gitlab-human-approval-refetch-fail-closed" \
+  "No authorized human approval on current HEAD" \
+  "MOCK_MR_APPROVALS_JSON=${GITLAB_APPROVED_JSON}" \
+  "MOCK_MR_ACCESS_LEVEL=40" \
+  "MOCK_MR_REFETCH_FAIL=1"
 
 # ---------------------------------------------------------------------------
 # Risk assessment label + comment tests

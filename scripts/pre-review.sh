@@ -508,11 +508,17 @@ forge_list_repo_labels() {
 # Returns 0 if an authorized human has already approved the current HEAD,
 # 1 otherwise. Fail-closed on any API error or incomplete signal.
 #
-# Two independent gates, both required:
+# Three independent gates, all required:
 #   1. GitLab's approvals.approved is true — respects approval rules.
 #   2. At least one non-bot, non-author approver has Developer or higher
 #      (access_level >= 30). approved=true with zero required approvals
 #      and an empty approved_by list does not satisfy this gate.
+#   3. That approver has an "approved this merge request" system note
+#      timestamped at or after the current HEAD commit was pushed.
+#      approved_by is MR-level, not SHA-scoped: when a project disables
+#      reset_approvals_on_push, an approval recorded before earlier
+#      pushes still appears here after HEAD has moved. Gate 3 binds the
+#      approval to HEAD the same way GitHub's `commit_id == sha` does.
 forge_has_authorized_human_approval() {
   local mr_data
   mr_data=$(_gitlab_api GET "/projects/${REPO_ENCODED}/merge_requests/${PR_NUMBER}" 2>/dev/null) || return 1
@@ -557,13 +563,38 @@ forge_has_authorized_human_approval() {
   [[ -n "${current_sha}" ]] || return 1
   [[ "${current_sha}" == "${sha}" ]] || return 1
 
-  local id username member access
+  # Gate 3: resolve when the current HEAD commit was pushed, then require
+  # a qualifying approval note timestamped at or after that push. Fail
+  # closed if either call errors or the commit timestamp is unavailable.
+  local commit_data commit_epoch
+  commit_data=$(_gitlab_api GET "/projects/${REPO_ENCODED}/repository/commits/${current_sha}" 2>/dev/null) || return 1
+  [[ -n "${commit_data}" ]] || return 1
+  commit_epoch=$(printf '%s' "${commit_data}" | jq -r '
+    (.committed_date // empty) as $d
+    | if ($d | length) > 0 then ($d | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) else empty end
+  ') || return 1
+  [[ "${commit_epoch}" =~ ^[0-9]+$ ]] || return 1
+
+  local notes
+  notes=$(_gitlab_api GET "/projects/${REPO_ENCODED}/merge_requests/${PR_NUMBER}/notes?per_page=100&sort=desc" 2>/dev/null) || return 1
+  [[ -n "${notes}" ]] || return 1
+
+  local id username member access approval_epoch
   while IFS=$'\t' read -r id username; do
     [[ -n "${id}" ]] || continue
+
+    approval_epoch=$(printf '%s' "${notes}" | jq -r --arg user "${username}" '
+      [.[]? | select(.system == true and .body == "approved this merge request" and (.author.username // "") == $user)
+            | (.created_at | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601)?]
+      | if length > 0 then max else empty end
+    ') || continue
+    [[ "${approval_epoch}" =~ ^[0-9]+$ ]] || continue
+    [ "${approval_epoch}" -ge "${commit_epoch}" ] || continue
+
     member=$(_gitlab_api GET "/projects/${REPO_ENCODED}/members/all/${id}" 2>/dev/null) || continue
     access=$(printf '%s' "${member}" | jq -r '.access_level // 0') || continue
     if [[ "${access}" =~ ^[0-9]+$ ]] && [ "${access}" -ge 30 ]; then
-      echo "Authorized human approval from ${username} (access_level=${access})"
+      echo "Authorized human approval from ${username} (access_level=${access}) on HEAD ${current_sha}"
       return 0
     fi
   done <<< "${candidates}"
