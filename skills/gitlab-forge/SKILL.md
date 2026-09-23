@@ -77,13 +77,24 @@ curl --silent --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
 # Group-wide listing of opened MRs whose title/description mention this
 # issue. Catches implementing MRs in sibling projects that the issue body
 # never names. Run even when no other project is mentioned on the issue.
+# scope=all is required — the group merge-request list defaults to
+# scope=created_by_me, so without it the response silently omits MRs
+# authored by other users or bots, which is exactly the case this search
+# exists to catch. Check the HTTP status: a 403/404 on the group endpoint
+# means the search failed (e.g. insufficient access to the group), not
+# that there are no matches — record that as an information gap.
 # PARENT_GROUP is REPO with the last path segment removed
 # (group/subgroup/project → group/subgroup).
 PARENT_GROUP=$(echo "${REPO}" | sed -E 's|/[^/]+$||')
 PARENT_ENCODED=$(printf '%s' "${PARENT_GROUP}" | jq -sRr @uri)
 ISSUE_REF=$(printf '%s' "${REPO}#${ISSUE_NUMBER}" | jq -sRr @uri)
-curl --silent --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
-  "https://${GITLAB_HOST}/api/v4/groups/${PARENT_ENCODED}/merge_requests?state=opened&search=${ISSUE_REF}&per_page=20"
+GROUP_MR_RESPONSE=$(curl --silent --write-out '\n%{http_code}' --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+  "https://${GITLAB_HOST}/api/v4/groups/${PARENT_ENCODED}/merge_requests?state=opened&scope=all&search=${ISSUE_REF}&per_page=20")
+GROUP_MR_STATUS=$(echo "${GROUP_MR_RESPONSE}" | tail -n1)
+GROUP_MR_BODY=$(echo "${GROUP_MR_RESPONSE}" | sed '$d')
+# GROUP_MR_STATUS != 200 is a search failure, not "no matches" — note it
+# in `reasoning` as an information gap per agents/triage.md rather than
+# concluding no implementing MR exists.
 ```
 
 ## Repository Contents

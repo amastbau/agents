@@ -78,9 +78,14 @@ gh search prs --owner OWNER --state open --json number,url,title,repository,isDr
 # CLOSED without MERGED means abandoned — do not error.
 gh pr view NUMBER --repo OWNER/REPO --json state,title,body,comments,labels,mergedAt,isDraft,reviewDecision,reviewRequests,url
 
-# CI check summary (pass / fail / pending per check). Empty output means
-# no checks are configured — report that as "no checks", not as a failure.
-gh pr checks NUMBER --repo OWNER/REPO
+# CI check summary (pass / fail / pending per check). Exit code is 0 when
+# all checks pass, 8 when checks are still pending, and nonzero (1) both
+# when a check fails AND when no checks are configured at all — a bare
+# nonzero exit is not itself a fetch error, so guard with `|| true` and
+# inspect stdout/stderr rather than trusting the exit code alone. Empty
+# stdout (or stderr noting no checks were found) means "no checks";
+# report that, not a failure.
+gh pr checks NUMBER --repo OWNER/REPO || true
 ```
 
 ## Repository Contents
