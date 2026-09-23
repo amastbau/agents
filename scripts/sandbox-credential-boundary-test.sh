@@ -201,14 +201,6 @@ for skill_file in "${GITHUB_SKILL_FILES[@]}"; do
   else
     assert_fail "${test_name}" "missing gh CLI auth via GH_TOKEN (Authorization-family path)"
   fi
-
-  test_name="skill-${skill_name}-no-unverified-token-header"
-  if grep -qF 'PRIVATE-TOKEN' "${skill_file}" ||
-    grep -E -- '(-H|--header)' "${skill_file}" | grep -qF 'GH_TOKEN'; then
-    assert_fail "${test_name}" "GH_TOKEN must not be passed via a custom header; gh sends Authorization"
-  else
-    assert_pass "${test_name}"
-  fi
 done
 
 # Canonical GitHub forge skill must name the Authorization rewrite path
@@ -221,6 +213,38 @@ if grep -qF 'Authorization' "${github_forge}" &&
 else
   assert_fail "${test_name}" "github-forge skill must document that gh sends Authorization for OpenShell rewrite"
 fi
+
+# ---------------------------------------------------------------------------
+# Test: GitHub skill files must not send GH_TOKEN via an unverified header
+# ---------------------------------------------------------------------------
+# Regression guard against every GitHub skill file, matching GitLab's
+# exhaustive no-private-token coverage below: gh sends GH_TOKEN via
+# Authorization, so no skill should introduce a custom header carrying it.
+GITHUB_TOKEN_HEADER_FILES=(
+  "${REPO_ROOT}/skills/github-forge/SKILL.md"
+  "${REPO_ROOT}/skills/fix-review/github/SKILL.md"
+  "${REPO_ROOT}/skills/finding-agent-runs/github/SKILL.md"
+  "${REPO_ROOT}/skills/issue-labels/github/SKILL.md"
+  "${REPO_ROOT}/skills/pr-review/github/SKILL.md"
+  "${REPO_ROOT}/skills/retro-analysis/github/SKILL.md"
+)
+
+for skill_file in "${GITHUB_TOKEN_HEADER_FILES[@]}"; do
+  skill_name="$(skill_rel_name "${skill_file}")"
+  test_name="skill-${skill_name}-no-unverified-token-header"
+
+  if [ ! -f "${skill_file}" ]; then
+    assert_fail "${test_name}" "${skill_file} not found"
+    continue
+  fi
+
+  if grep -qF 'PRIVATE-TOKEN' "${skill_file}" ||
+    grep -E -- '(-H|--header)' "${skill_file}" | grep -qF 'GH_TOKEN'; then
+    assert_fail "${test_name}" "GH_TOKEN must not be passed via a custom header; gh sends Authorization"
+  else
+    assert_pass "${test_name}"
+  fi
+done
 
 # ---------------------------------------------------------------------------
 # Test: GitLab skill files carry GITLAB_TOKEN through Authorization: Bearer
