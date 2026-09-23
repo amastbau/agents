@@ -227,6 +227,13 @@ ${ISSUE_BODY}
     # visibility check) is a real blocker the agent found but must not
     # surface publicly — exclude it from the footer too, since this footer
     # is appended unconditionally regardless of what `comment` says.
+    #
+    # The agent's `redacted` flag is a signal, not a guarantee: an agent
+    # that omits it, sets it false, or could not determine visibility
+    # would otherwise leak the URL here. Re-check visibility server-side
+    # (_candidate_url_is_public, triage-ops.lib.sh) before trusting an
+    # unmarked entry, and treat private/internal/unknown the same as an
+    # explicit `redacted: true`.
     EXISTING_COUNT=$(jq '.prerequisites.existing // [] | length' "${RESULT_FILE}")
     EXISTING_URLS=""
     REDACTED_EXISTING_COUNT=0
@@ -237,6 +244,11 @@ ${ISSUE_BODY}
         continue
       fi
       URL=$(jq -r ".prerequisites.existing[${i}].url" "${RESULT_FILE}")
+      if ! _candidate_url_is_public "${URL}"; then
+        echo "::warning::Server-side visibility check withheld a prerequisite URL the agent did not mark redacted"
+        REDACTED_EXISTING_COUNT=$((REDACTED_EXISTING_COUNT + 1))
+        continue
+      fi
       EXISTING_URLS="${EXISTING_URLS} ${URL}"
     done
 
@@ -304,6 +316,13 @@ ${FAILED_CREATES}"
     # visibility check) is a real PR the agent found but must not surface
     # publicly — exclude it from this footer too, since it is appended
     # unconditionally regardless of what `comment` says.
+    #
+    # The agent's `redacted` flag is a signal, not a guarantee: an agent
+    # that omits it, sets it false, or could not determine visibility
+    # would otherwise leak the URL here. Re-check visibility server-side
+    # (_candidate_url_is_public, triage-ops.lib.sh) before trusting an
+    # unmarked entry, and treat private/internal/unknown the same as an
+    # explicit `redacted: true`.
     PR_LIST=""
     REDACTED_PR_COUNT=0
     for i in $(seq 0 $((PR_COUNT - 1))); do
@@ -313,6 +332,11 @@ ${FAILED_CREATES}"
         continue
       fi
       URL=$(jq -er ".pull_requests[${i}].url" "${RESULT_FILE}")
+      if ! _candidate_url_is_public "${URL}"; then
+        echo "::warning::Server-side visibility check withheld a pull request URL the agent did not mark redacted"
+        REDACTED_PR_COUNT=$((REDACTED_PR_COUNT + 1))
+        continue
+      fi
       PR_LIST="${PR_LIST}
 - ${URL}"
     done

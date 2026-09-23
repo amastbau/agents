@@ -30,6 +30,19 @@ if [[ "\$1" == "api" ]] && [[ "\$2" == *"/labels" ]] && [[ "\$*" == *"--paginate
   printf '%s\n' "area/api" "area/cli" "priority/high" "component/parser" "enhancement" "bug" "documentation" "pr-open"
   exit 0
 fi
+# Candidate-visibility lookup (_candidate_url_visibility in triage-ops.lib.sh,
+# the server-side check that backs agents/triage.md's Visibility check).
+# Treat any repo path containing "private-sibling" as private, matching the
+# redacted-URL test fixtures below; everything else is public. Not logged to
+# GH_LOG -- it's an internal safety lookup, not a call whose output should
+# ever reach the posted comment/label calls the other tests scan for.
+if [[ "\$1" == "repo" ]] && [[ "\$2" == "view" ]] && [[ "\$*" == *"--json visibility"* ]]; then
+  case "\$*" in
+    *private-sibling*) echo "private" ;;
+    *) echo "public" ;;
+  esac
+  exit 0
+fi
 # For issue create, return a fake URL on stdout so callers can capture it.
 if [[ "\$1" == "issue" ]] && [[ "\$2" == "create" ]]; then
   echo "gh \$*" >> "${GH_LOG}"
@@ -380,6 +393,29 @@ run_test_not_contains "prerequisites-all-redacted-never-logs-url" \
   '{"action":"prerequisites","reasoning":"needs an upstream fix from a private repo","prerequisites":{"existing":[{"url":"https://github.com/other-org/private-sibling/issues/3","redacted":true}],"create":[]},"comment":"This issue is blocked on an upstream dependency."}' \
   "private-sibling"
 
+# Fail-closed server-side check (the [fail-open] review finding): an agent
+# that finds a private-repo blocker but does not set "redacted" must not
+# leak the URL. The mock gh treats any "private-sibling" repo path as
+# private, so the script's own visibility re-check must catch what the
+# agent flag alone did not.
+run_test "prerequisites-unmarked-private-url-withheld-fail-closed" \
+  '{"action":"prerequisites","reasoning":"needs an upstream fix from a private repo the agent forgot to mark redacted","prerequisites":{"existing":[{"url":"https://github.com/other-org/private-sibling/issues/3"}],"create":[]},"comment":"This issue is blocked on an upstream dependency."}' \
+  "a prerequisite in another repository (details withheld)."
+
+run_test_not_contains "prerequisites-unmarked-private-url-never-logged-fail-closed" \
+  '{"action":"prerequisites","reasoning":"needs an upstream fix from a private repo the agent forgot to mark redacted","prerequisites":{"existing":[{"url":"https://github.com/other-org/private-sibling/issues/3"}],"create":[]},"comment":"This issue is blocked on an upstream dependency."}' \
+  "private-sibling"
+
+run_test_stdout "prerequisites-unmarked-private-url-warns-fail-closed" \
+  '{"action":"prerequisites","reasoning":"needs an upstream fix from a private repo the agent forgot to mark redacted","prerequisites":{"existing":[{"url":"https://github.com/other-org/private-sibling/issues/3"}],"create":[]},"comment":"This issue is blocked on an upstream dependency."}' \
+  "::warning::Server-side visibility check withheld a prerequisite URL the agent did not mark redacted"
+
+# Regression guard: Jira blocker URLs have no repo-visibility concept in
+# this pipeline and must not be swept up by the new fail-closed default.
+run_test "prerequisites-jira-url-unaffected-by-visibility-check" \
+  '{"action":"prerequisites","reasoning":"needs an upstream Jira issue resolved first","prerequisites":{"existing":[{"url":"https://mycompany.atlassian.net/browse/PROJ-123"}],"create":[]},"comment":"This issue is blocked on an upstream Jira issue."}' \
+  "- https://mycompany.atlassian.net/browse/PROJ-123"
+
 run_test "prerequisites-creates-allowed-issue" \
   '{"action":"prerequisites","reasoning":"needs upstream fix","prerequisites":{"existing":[],"create":[{"repo":"allowed-org/allowed-repo","title":"Need X","body":"We need X for downstream."}]},"comment":"Blocked on upstream work."}' \
   "gh issue create --repo allowed-org/allowed-repo --title Need X --body We need X for downstream."
@@ -447,6 +483,23 @@ run_test "in-progress-all-redacted-uses-generic-footer" \
 run_test_not_contains "in-progress-all-redacted-never-logs-url" \
   '{"action":"in-progress","reasoning":"A PR in a private sibling repo fixes this","pull_requests":[{"url":"https://github.com/test-org/private-sibling/pull/7","redacted":true}],"comment":"Work already in progress elsewhere is already addressing this issue."}' \
   "private-sibling"
+
+# Fail-closed server-side check (the [fail-open] review finding): an agent
+# that finds a fixing PR in a private sibling repo but does not set
+# "redacted" must not leak the URL. The mock gh treats any
+# "private-sibling" repo path as private, so the script's own visibility
+# re-check must catch what the agent flag alone did not.
+run_test "in-progress-unmarked-private-pr-withheld-fail-closed" \
+  '{"action":"in-progress","reasoning":"PR #50 fixes the reported bug; a sibling PR in a private repo the agent forgot to mark redacted also does","pull_requests":[{"url":"https://github.com/test-org/test-repo/pull/50"},{"url":"https://github.com/test-org/private-sibling/pull/7"}],"comment":"An open PR is already addressing this issue."}' \
+  "- https://github.com/test-org/test-repo/pull/50"
+
+run_test_not_contains "in-progress-unmarked-private-pr-never-logged-fail-closed" \
+  '{"action":"in-progress","reasoning":"PR #50 fixes the reported bug; a sibling PR in a private repo the agent forgot to mark redacted also does","pull_requests":[{"url":"https://github.com/test-org/test-repo/pull/50"},{"url":"https://github.com/test-org/private-sibling/pull/7"}],"comment":"An open PR is already addressing this issue."}' \
+  "private-sibling"
+
+run_test_stdout "in-progress-unmarked-private-pr-warns-fail-closed" \
+  '{"action":"in-progress","reasoning":"A PR in a private sibling repo the agent forgot to mark redacted fixes this","pull_requests":[{"url":"https://github.com/test-org/private-sibling/pull/7"}],"comment":"Work already in progress elsewhere is already addressing this issue."}' \
+  "::warning::Server-side visibility check withheld a pull request URL the agent did not mark redacted"
 
 run_test "in-progress-creates-pr-open-label" \
   '{"action":"in-progress","reasoning":"PR #50 fixes the reported bug","pull_requests":[{"url":"https://github.com/test-org/test-repo/pull/50"}],"comment":"An open PR is already addressing this issue."}' \
@@ -1585,6 +1638,19 @@ if [[ "${URL}" =~ /user$ ]] && [[ "${METHOD}" == "GET" ]]; then
   exit 0
 fi
 
+# Candidate-visibility lookup (_candidate_url_visibility in
+# triage-ops.lib.sh): bare project detail endpoint, no further path
+# segments. Treat any project path containing "private-sibling" as
+# private, matching the redacted-URL test fixtures; everything else is
+# public.
+if [[ "${URL}" =~ /api/v4/projects/[^/?]+$ ]] && [[ "${METHOD}" == "GET" ]]; then
+  case "${URL}" in
+    *private-sibling*) echo '{"visibility":"private"}' ;;
+    *) echo '{"visibility":"public"}' ;;
+  esac
+  exit 0
+fi
+
 # Return labels for the issue when queried.
 if [[ "${URL}" =~ /issues/42$ ]] && [[ "${METHOD}" == "GET" ]]; then
   echo '{"iid":42,"title":"Test issue","labels":["area/api","old-label"],"state":"opened"}'
@@ -1815,6 +1881,16 @@ run_gitlab_test_stdout "gitlab-control-label-refused" \
 run_gitlab_test "gitlab-in-progress-posts-sticky-comment" \
   '{"action":"in-progress","reasoning":"MR !50 fixes the reported bug","pull_requests":[{"url":"https://gitlab.com/test-group/test-project/-/merge_requests/50"}],"comment":"An open MR is already addressing this issue."}' \
   "api/v4/projects/test-group%2Ftest-project/issues/42/notes"
+
+# Fail-closed server-side check (the [fail-open] review finding), GitLab
+# path: an agent that finds a fixing MR in a private sibling project but
+# does not set "redacted" must not leak the URL. The mock curl treats any
+# "private-sibling" project path as private, so the script's own
+# visibility re-check (_candidate_url_visibility in triage-ops.lib.sh)
+# must catch what the agent flag alone did not.
+run_gitlab_test_stdout "gitlab-in-progress-unmarked-private-mr-warns-fail-closed" \
+  '{"action":"in-progress","reasoning":"MR !7 in a private sibling project the agent forgot to mark redacted fixes this","pull_requests":[{"url":"https://gitlab.com/test-group/private-sibling/-/merge_requests/7"}],"comment":"Work already in progress elsewhere is already addressing this issue."}' \
+  "::warning::Server-side visibility check withheld a pull request URL the agent did not mark redacted"
 
 # --- GitLab sticky-comment author filtering ---
 
