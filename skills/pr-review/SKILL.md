@@ -298,7 +298,8 @@ complex PR that triggers all conditions legitimately needs all 6.
 **Conditionally included based on classification:**
 
 - `security` — when auth, permissions, secrets, data handling, string
-  literals, config, or metadata are touched
+  literals, config, or metadata are touched; also after 3c-1 when
+  `security_critical_files` is non-empty
 - `intent-coherence` — when linked issues exist or changes are
   non-trivial
 - `docs-currency` — when the repository has documentation files
@@ -337,7 +338,8 @@ complex PR that triggers all conditions legitimately needs all 6.
      `changed_since_prior` includes files matching their step 3b path
      criteria (auth/permissions/secrets/config/data-handling for
      `security`; public APIs, exported interfaces, schemas, or CLI
-     surface for `cross-repo-contracts`).
+     surface for `cross-repo-contracts`). A non-empty 3c-1
+     `security_critical_files` also qualifies `security`.
 
    If the incremental delta cannot be enumerated — `changed_since_prior`
    is `"all"` (the step 2a fallback for a failed compare, >250 commits,
@@ -467,7 +469,7 @@ incident.
      must stay read-only.
 
    This agent runs **synchronously** (not in the background) because
-   its output feeds into step 3d's context package assembly. It uses
+   its output feeds dispatch auto-inclusion and step 3d. It uses
    haiku for speed — classification does not require deep reasoning.
 
 5. Parse the triage output. The security-triage sub-agent returns a
@@ -521,16 +523,19 @@ incident.
    when path-pattern matches exist indicates the classifier missed
    obvious signals.
 
+   **Dispatch auto-inclusion:** If the triage pass succeeded and
+   `security_critical_files` is non-empty after the path-pattern
+   override, add `security` to the step 3c roster if absent. Skip
+   when 3c-1 was skipped or the triage pass failed.
+
 **Edge cases:**
 
-- **All files classified as security-critical:** The deep-review pass
-  covers all files with full context. This is equivalent to the
-  standard review behavior for smaller PRs — no degradation.
-- **No files classified as security-critical:** All files receive
-  standard review. The triage cost (one haiku call) is minimal.
-- **Triage sub-agent failure:** Fall back to uniform attention (all
-  files treated as security-critical). Log an info-level note in the
-  review output.
+- **All files classified as security-critical:** Auto-include
+  `security` if unselected. Deep-review covers all files.
+- **No files classified as security-critical:** Do not auto-include
+  `security`. All files receive standard review.
+- **Triage sub-agent failure:** Uniform attention; do not amend the
+  step 3c roster. Log an info-level note in the review output.
 
 #### 3c-2. Compose the risk assessment
 
@@ -693,27 +698,24 @@ the constraint first.
 
 When step 3c-1 produced a security triage classification (i.e., step 2
 selected per-file mode and the triage pass succeeded), modify the
-context packages for the `security` and `correctness` sub-agents as
-follows:
+context packages for `correctness` and, if selected, `security` as
+follows.
 
-1. **Security sub-agent:** Order its `pr_head` manifest lines with the
-   `security_critical_files` first, each tagged with the triage reason,
-   under `### Security-critical files`; standard files follow under
-   `### Standard files`. Content still comes from `pr-diff.txt` and the
-   tree — the ordering tells the sub-agent where to start.
+1. **Security sub-agent (skip if unselected):** Order its `pr_head`
+   manifest lines with the `security_critical_files` first, each tagged
+   with the triage reason, under `### Security-critical files`;
+   standard files follow under `### Standard files`. Content still
+   comes from `pr-diff.txt` and the tree — the ordering tells the
+   sub-agent where to start.
 
-2. **Correctness sub-agent:** Same prioritized ordering. Correctness
-   and security findings often overlap on the same code (a fail-open
-   bug is both), so the correctness sub-agent also benefits from
-   knowing which files the triage pass flagged.
+2. **Correctness sub-agent:** Same prioritized ordering.
 
 3. **Other sub-agents** (`intent-coherence`, `style-conventions`,
-   `docs-currency`, `cross-repo-contracts`): Receive the standard
-   context package without prioritization. These dimensions are not
-   affected by the security triage classification.
+   `docs-currency`, `cross-repo-contracts`): Standard package, no
+   prioritization.
 
-4. **Include the triage summary** in the context package for both
-   `security` and `correctness` sub-agents:
+4. **Include the triage summary** in the context package for
+   `correctness` and, if selected, `security`:
 
    ```markdown
    ### Security triage classification
