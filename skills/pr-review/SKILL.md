@@ -523,10 +523,10 @@ incident.
    when path-pattern matches exist indicates the classifier missed
    obvious signals.
 
-   **Dispatch auto-inclusion:** If the triage pass succeeded and
-   `security_critical_files` is non-empty after the path-pattern
-   override, add `security` to the step 3c roster if absent. Skip
-   when 3c-1 was skipped or the triage pass failed.
+   **Dispatch auto-inclusion:** Add `security` to selected
+   sub-agents if absent when `security_critical_files` is non-empty,
+   or the failure was the empty-classification guard. Skip
+   otherwise.
 
 **Edge cases:**
 
@@ -534,8 +534,10 @@ incident.
   `security` if unselected. Deep-review covers all files.
 - **No files classified as security-critical:** Do not auto-include
   `security`. All files receive standard review.
-- **Triage sub-agent failure:** Uniform attention; do not amend the
-  step 3c roster. Log an info-level note in the review output.
+- **Empty-classification guard:** Auto-include `security` if
+  unselected.
+- **Other triage failure:** Uniform attention; do not amend
+  selected sub-agents. Log an info-level note.
 
 #### 3c-2. Compose the risk assessment
 
