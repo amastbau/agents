@@ -489,7 +489,8 @@ incident.
    produced by the orchestrator's step 2 (large-PR mode file
    selection — not this procedure's own governance-paths step 2
    above). If any check fails, treat as a triage failure and apply
-   the fallback above.
+   the fallback above for 3f only; a non-empty pre-validation
+   classification still counts as a dispatch signal below.
 
    a. **Completeness:** The union of paths in
       `security_critical_files` (by `file` field) and
@@ -515,29 +516,23 @@ incident.
    authoritative and takes precedence.
 
    **Empty-classification guard:** If `security_critical_files` is
-   empty after the path-pattern override but any changed files
-   match the path patterns from the classification criteria (e.g.,
-   `**/auth/**`, `**/mint/**`, `**/token/**`, `.claude/**`, `.pi/**`,
-   `.github/**`, `agents/**`, `scripts/**`), treat this as a
-   triage failure and apply the fallback. An empty classification
+   empty after the path-pattern override but any changed files match
+   the path patterns from the classification criteria, treat this as
+   a triage failure and apply the fallback. An empty classification
    when path-pattern matches exist indicates the classifier missed
-   obvious signals.
+   obvious signals. This check also runs, classifier-independent, on
+   any other failure (timeout, parse error, empty response,
+   structural validation).
 
    **Dispatch auto-inclusion:** Add `security` to selected
    sub-agents if absent when `security_critical_files` is non-empty,
-   or the failure was the empty-classification guard. Skip
-   otherwise.
+   the pre-validation classification was non-empty, or a changed file
+   matches a known path pattern. Skip only when none apply.
 
-**Edge cases:**
-
-- **All files classified as security-critical:** Auto-include
-  `security` if unselected. Deep-review covers all files.
-- **No files classified as security-critical:** Do not auto-include
-  `security`. All files receive standard review.
-- **Empty-classification guard:** Auto-include `security` if
-  unselected.
-- **Other triage failure:** Uniform attention; do not amend
-  selected sub-agents. Log an info-level note.
+**Edge cases:** `security` dispatch inclusion always follows
+**Dispatch auto-inclusion** above, in every failure mode (timeout,
+parse error, empty response, structural validation) as well as on
+triage success — the failure fallback governs 3f's packaging only.
 
 #### 3c-2. Compose the risk assessment
 
