@@ -195,14 +195,16 @@ Check if `/sandbox/workspace/prior-review.txt` exists and is non-empty:
 - **Absent or empty:** This is a first review — skip to step 3.
 - **Present:** Read the **current section** (content before
   `<details><summary>Previous run</summary>`) for prior findings and
-  severities. Collect `{file, location, suggested_action}` from every
-  `Remediation:` line in the file, including nested history.
+  severities, and `{file, line, remediation}` per `Remediation:` line
+  (including nested history) — `file`/`line` from the parent bullet,
+  `remediation` from that line's text; skip bullets without one.
+  Match by function/class name.
 
-If `PRIOR_REVIEW_PROVENANCE` starts with `unverifiable-`, treat as a
-first review (step 7). If `PRIOR_REVIEW_SHA` is set, compute changed
-files via the forge skill's "Prior review comparison"; on failure or
-truncation (GitHub: 300 files when `total_commits` exceeds 250), treat
-all files as changed.
+If `PRIOR_REVIEW_PROVENANCE` starts with `unverifiable-`, run steps
+3-6 as a first review; step 7 is not a jump target. If
+`PRIOR_REVIEW_SHA` is set, compute changed files via the forge skill's
+"Prior review comparison"; on failure or truncation (GitHub: 300 files
+when `total_commits` exceeds 250), treat all files as changed.
 
 ### 3. Triage
 
@@ -639,7 +641,7 @@ For each selected sub-agent, assemble a context package containing:
   in sub-agent findings
 - `changed_files`: list of relative file paths modified
 - `prior_findings`: prior findings for this dimension only (from 3a)
-- `prior_remediations`: all-round remediations from 2a
+- `prior_remediations`: `{file, line, remediation}` tuples from 2a
 - `prior_review_sha`: the SHA of the prior review (from 2a)
 - `changed_since_prior`: file set that changed since prior review
 - `pr_metadata`: title, body, author, labels, draft status
@@ -780,7 +782,7 @@ here):
    <prior findings JSON or "none — first review">
 
    ### Prior remediations
-   <{file, location, suggested_action} list or "none">
+   <{file, line, remediation} list or "none">
 
    ### Prior review SHA
    <sha or "none">
@@ -933,9 +935,7 @@ location."
 keep both** — they serve different remediation audiences. A logic error
 and an auth bypass on the same line are two distinct findings.
 
-**Exception — prior remediations:** Omit findings that object to an
-implemented step-2a remediation at the same file/location. Record
-`addressed per prior review guidance`.
+No omission happens here — see 6d.
 
 #### 6d. Challenger pass (dedicated sub-agent)
 
