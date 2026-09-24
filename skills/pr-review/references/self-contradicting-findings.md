@@ -20,9 +20,14 @@ pre-existing, or intentional.
 3. **Genuine defect** that mentions existing patterns only as context
    (without conceding the flagged behavior is fine): leave unchanged.
 
-Skip `protected-path`, `sub-agent-failure`, and `provenance-warning`.
-Process findings are not self-contradicting analysis; human approval
-is still required for protected paths.
+Skip `protected-path`, `sub-agent-failure`, `provenance-warning`,
+`permission-expansion`, `permission-reduction`, `role-escalation`, and
+`workflow-permission`. Process findings are not self-contradicting
+analysis; human approval is still required for protected paths. The
+permission/role categories are mandated confirmation findings per
+`sub-agents/security.md` — e.g., a permission reduction reported as
+"info confirming intentionality" must always be emitted, even when it
+concedes the change is acceptable.
 
 After disposition, apply `$REVIEW_FINDING_SEVERITY_THRESHOLD`. An
 `info` enhancement below the threshold is omitted from the review

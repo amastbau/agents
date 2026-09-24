@@ -54,9 +54,13 @@ For each finding:
    credential flows, or reference integrity across the full codebase.
    Remove unsubstantiated verification text.
 6. **Filter self-contradicting findings.** Apply
-   [self-contradicting-findings.md](../references/self-contradicting-findings.md).
-   Remove when there is no concrete improvement; otherwise downgrade
-   to `info` / `enhancement-opportunity` with `actionable: false`.
+   [self-contradicting-findings.md](../references/self-contradicting-findings.md):
+   remove when there is no concrete improvement (disposition 1);
+   downgrade to `info` / `enhancement-opportunity` with
+   `actionable: false` when there is a concrete improvement despite
+   accepting the current state (disposition 2); leave a genuine defect
+   that mentions existing patterns only as context unchanged
+   (disposition 3).
 
 ## Output format
 
