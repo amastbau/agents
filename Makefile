@@ -99,4 +99,4 @@ script-test:
 test: script-test
 
 behaviour-test:
-	go test -count=1 -timeout 40m -tags "$(BEHAVIOUR_TEST_TAGS)" $(BEHAVIOUR_GOFLAGS) -exec "$(BEHAVIOUR_TEST_EXEC)" ./behaviour
+	go test -v -count=1 -timeout 40m -tags "$(BEHAVIOUR_TEST_TAGS)" $(BEHAVIOUR_GOFLAGS) -exec "$(BEHAVIOUR_TEST_EXEC)" ./behaviour
