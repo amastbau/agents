@@ -209,10 +209,15 @@ mutations on the runner.
   sub-agent definition files are a completed review with
   `sub-agent-failure` findings, not this case.
 - When `pr-review` requires sub-agent dispatch but a definition file
-  cannot be found or read, treat it as a `sub-agent-failure` finding
-  (high severity for Opus-tier `correctness` and `security`). Report
-  the infrastructure gap in the review body and set `action` to
-  `request-changes`. Do not fall back to a single-pass `code-review`.
+  cannot be found or read, treat it as a `sub-agent-failure` finding:
+  high severity for Opus-tier `correctness` and `security`, info
+  severity for Sonnet-tier `intent-coherence`, `style-conventions`,
+  `docs-currency`, and `cross-repo-contracts`. Report the
+  infrastructure gap in the review body. A high-severity finding
+  forces the orchestrator to set `action` to `request-changes`; an
+  info-severity one does not by itself — combine it with any other
+  findings under the normal outcome rules below. Do not fall back to
+  a single-pass `code-review`.
 
 ## Output format
 
@@ -239,7 +244,9 @@ mutations on the runner.
   unauthorized change, or the PR should be closed/rethought)
 - `failure` — review could not be completed (tool failure, missing
   context, ambiguous findings, token-limit, time-budget). Missing
-  sub-agent files are `request-changes`, not `failure`.
+  sub-agent files are a completed review, not `failure`; the resulting
+  outcome follows the tiered `sub-agent-failure` severity in
+  Constraints above, not automatically `request-changes`.
 
 When the change is safe and no findings have `actionable: true` with a
 non-empty `remediation`, approve the PR. Observations, confirmations,
