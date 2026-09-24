@@ -241,9 +241,10 @@ For each issue identified, record:
 before asserting its contents — read it now if not, or say so if
 unreadable, rather than assert unverified contents.
 
-Drop no-fix self-contradictions; keep fixable as info,
-non-actionable; defects citing patterns keep severity — except its
-skip list (`self-contradicting-findings.md`).
+**Self-contradicting findings:** Drop no-fix self-contradictions; keep
+fixable as info, non-actionable; defects citing patterns keep
+severity — except those in the skip list (see
+[self-contradicting-findings.md](../pr-review/references/self-contradicting-findings.md)).
 
 #### Severity anchoring (re-reviews)
 
