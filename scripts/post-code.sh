@@ -2850,7 +2850,12 @@ history_rewrite_preserves_remote_human_commits() {
     echo "history-rewrite: could not compute merge-base of ${target_ref} and ${remote_ref}" >&2
     return 1
   }
-  for sha in $(git rev-list "${mb}..${remote_ref}" 2>/dev/null || true); do
+  local rewrite_list
+  rewrite_list="$(git rev-list "${mb}..${remote_ref}" 2>/dev/null)" || {
+    echo "history-rewrite: could not list commits on ${remote_ref}" >&2
+    return 1
+  }
+  for sha in ${rewrite_list}; do
     author_email="$(git log -1 --format='%ae' "${sha}" 2>/dev/null)"
     author_name="$(git log -1 --format='%an' "${sha}" 2>/dev/null)"
     if [ "${author_email}" != "${bot}" ] || [ "${author_name}" != "${CODE_AGENT_GIT_NAME}" ]; then
