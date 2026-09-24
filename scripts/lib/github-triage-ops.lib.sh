@@ -135,3 +135,24 @@ tracker_create_issue() {
   rm -f "${err_file}"
   echo "${url}"
 }
+
+# Apply ready-for-triage to a newly created issue so the dispatch shim
+# picks it up. issues.opened from a workflow-driven create may not start
+# a new run; issues.labeled does. Failures are non-fatal for the caller.
+tracker_dispatch_triage() {
+  local issue_url="$1"
+  local saved_repo="${REPO}"
+  local saved_number="${ISSUE_NUMBER}"
+  REPO=$(echo "${issue_url}" | sed 's|https://github.com/||; s|/issues/.*||')
+  ISSUE_NUMBER=$(basename "${issue_url}")
+  # Ensure the label exists in the target repo (needed for cross-repo splits).
+  tracker_create_label "ready-for-triage" "Triggers triage agent dispatch" "0E8A16"
+  local rc=0
+  if ! tracker_add_label "ready-for-triage"; then
+    echo "::warning::Failed to add ready-for-triage label to $(_gha_sanitize "${issue_url}")" >&2
+    rc=1
+  fi
+  REPO="${saved_repo}"
+  ISSUE_NUMBER="${saved_number}"
+  return "${rc}"
+}
