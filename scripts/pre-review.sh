@@ -212,6 +212,7 @@ forge_has_authorized_human_approval() {
   author_login=$(printf '%s' "${pr_json}" | jq -r '.author.login // empty') || return 1
 
   [[ -n "${head_sha}" ]] || return 1
+  [[ -n "${author_login}" ]] || return 1
 
   case "${review_decision}" in
     CHANGES_REQUESTED|REVIEW_REQUIRED)
@@ -223,10 +224,15 @@ forge_has_authorized_human_approval() {
   reviews=$(GH_TOKEN="${REVIEW_TOKEN}" gh api \
     "repos/${REPO}/pulls/${PR_NUMBER}/reviews" --paginate 2>/dev/null) || return 1
 
+  # Each reviewer's *effective* review ignores COMMENTED and PENDING —
+  # GitHub's own merge-gating semantics do the same: a later comment does
+  # not clear an outstanding CHANGES_REQUESTED. Only the latest of
+  # APPROVED/CHANGES_REQUESTED/DISMISSED per reviewer counts.
   local blocking_count
   blocking_count=$(printf '%s' "${reviews}" | jq -r -s '
     add // []
     | map(select(.user != null and (.user.login // "") != ""))
+    | map(select(.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED"))
     | group_by(.user.login)
     | map(max_by(.submitted_at // ""))
     | map(select(.state == "CHANGES_REQUESTED"))
@@ -571,7 +577,11 @@ def iso8601_epoch:
 #      when the SHA became MR HEAD (the diff version's created_at), not
 #      the commit's committer date, which is not push-ordered and can
 #      predate a still-standing approval note under a workflow that
-#      backdates commits or replays them from another branch.
+#      backdates commits or replays them from another branch. Gate 3
+#      itself spans a versions call, paginated notes, and a member
+#      lookup, so HEAD is re-checked one final time immediately before
+#      returning success — a push during that window must not be
+#      authorized against the earlier snapshot.
 forge_has_authorized_human_approval() {
   local mr_data
   mr_data=$(_gitlab_api GET "/projects/${REPO_ENCODED}/merge_requests/${PR_NUMBER}" 2>/dev/null) || return 1
@@ -581,6 +591,7 @@ forge_has_authorized_human_approval() {
   sha=$(printf '%s' "${mr_data}" | jq -r '.sha // empty') || return 1
   author_login=$(printf '%s' "${mr_data}" | jq -r '.author.username // empty') || return 1
   [[ -n "${sha}" ]] || return 1
+  [[ -n "${author_login}" ]] || return 1
 
   local approvals
   approvals=$(_gitlab_api GET "/projects/${REPO_ENCODED}/merge_requests/${PR_NUMBER}/approvals" 2>/dev/null) || return 1
@@ -665,6 +676,15 @@ forge_has_authorized_human_approval() {
     member=$(_gitlab_api GET "/projects/${REPO_ENCODED}/members/all/${id}" 2>/dev/null) || continue
     access=$(printf '%s' "${member}" | jq -r '.access_level // 0') || continue
     if [[ "${access}" =~ ^[0-9]+$ ]] && [ "${access}" -ge 30 ]; then
+      # Gate 3 spans a versions call, up to 50 paginated notes pages, and a
+      # member lookup — re-check HEAD one last time immediately before
+      # trusting the result. A push during that window that replaces the
+      # approved HEAD with an unreviewed one must not be authorized here.
+      local final_sha
+      final_sha=$(_gitlab_api GET "/projects/${REPO_ENCODED}/merge_requests/${PR_NUMBER}" 2>/dev/null \
+        | jq -r '.sha // empty') || return 1
+      [[ -n "${final_sha}" ]] || return 1
+      [[ "${final_sha}" == "${current_sha}" ]] || return 1
       echo "Authorized human approval from ${username} (access_level=${access}) on HEAD ${current_sha}"
       return 0
     fi

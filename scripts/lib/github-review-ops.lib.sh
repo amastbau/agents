@@ -177,6 +177,7 @@ forge_has_authorized_human_approval() {
   author_login=$(printf '%s' "${pr_json}" | jq -r '.author.login // empty') || return 1
 
   [[ -n "${head_sha}" ]] || return 1
+  [[ -n "${author_login}" ]] || return 1
 
   case "${review_decision}" in
     CHANGES_REQUESTED|REVIEW_REQUIRED)
@@ -188,10 +189,15 @@ forge_has_authorized_human_approval() {
   reviews=$(GH_TOKEN="${REVIEW_TOKEN}" gh api \
     "repos/${REPO}/pulls/${PR_NUMBER}/reviews" --paginate 2>/dev/null) || return 1
 
+  # Each reviewer's *effective* review ignores COMMENTED and PENDING —
+  # GitHub's own merge-gating semantics do the same: a later comment does
+  # not clear an outstanding CHANGES_REQUESTED. Only the latest of
+  # APPROVED/CHANGES_REQUESTED/DISMISSED per reviewer counts.
   local blocking_count
   blocking_count=$(printf '%s' "${reviews}" | jq -r -s '
     add // []
     | map(select(.user != null and (.user.login // "") != ""))
+    | map(select(.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED"))
     | group_by(.user.login)
     | map(max_by(.submitted_at // ""))
     | map(select(.state == "CHANGES_REQUESTED"))

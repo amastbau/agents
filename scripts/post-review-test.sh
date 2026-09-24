@@ -752,9 +752,10 @@ if [[ "\${URL}" == *"/merge_requests/"* ]] && [[ "\${URL}" == *"/notes"* ]]; the
 fi
 
 # GET /merge_requests/:iid → MR metadata. Called once from forge_get_pr_info
-# up front, then twice more inside forge_has_authorized_human_approval (the
-# initial read and the TOCTOU re-fetch) — a call counter lets the mock
-# simulate the HEAD SHA moving between those last two reads.
+# up front, then up to three more times inside forge_has_authorized_human_
+# approval (the initial read, the Gate-2 TOCTOU re-fetch, and — only when
+# Gate 3 succeeds — the final re-check immediately before returning 0) — a
+# call counter lets the mock simulate the HEAD SHA moving between reads.
 if [[ "\${URL}" == *"/merge_requests/"* ]] && [[ "\${URL}" != *"/notes"* ]] && [[ "\${URL}" != *"/changes"* ]] && [[ "\${URL}" != *"/labels"* ]] && [[ "\${URL}" != *"/approvals"* ]] && [[ "\${URL}" != *"/versions"* ]]; then
   COUNT_FILE=".gitlab-mr-fetch-count"
   MR_FETCH_COUNT=0
@@ -771,6 +772,13 @@ if [[ "\${URL}" == *"/merge_requests/"* ]] && [[ "\${URL}" != *"/notes"* ]] && [
       exit 1
     fi
     SHA="\${MOCK_MR_SHA_REFETCH:-\${SHA}}"
+  fi
+  if [[ "\${MR_FETCH_COUNT}" -ge 4 ]]; then
+    if [[ -n "\${MOCK_MR_FINAL_REFETCH_FAIL:-}" ]]; then
+      echo "mock curl mr final refetch failure" >&2
+      exit 1
+    fi
+    SHA="\${MOCK_MR_SHA_FINAL_REFETCH:-\${SHA}}"
   fi
   printf '{"state":"opened","draft":%s,"author":{"username":"%s"},"iid":99,"sha":"%s"}\n' "\${DRAFT}" "\${AUTHOR}" "\${SHA}"
   exit 0
@@ -2381,6 +2389,26 @@ run_comment_human_approval_test "comment-governance-null-decision-stale-changes-
   'MOCK_REVIEWS_JSON=[{"state":"CHANGES_REQUESTED","commit_id":"abc123","user":{"login":"alice","type":"User"},"submitted_at":"2026-01-01T00:00:00Z"},{"state":"APPROVED","commit_id":"abc123","user":{"login":"alice","type":"User"},"submitted_at":"2026-01-02T00:00:00Z"}]' \
   "MOCK_COLLABORATOR_ROLE=write"
 
+# reviewDecision is null and the same qualifying human's CHANGES_REQUESTED
+# was later "superseded" only by a COMMENTED review — COMMENTED must not
+# count as the reviewer's effective state, so the outstanding
+# CHANGES_REQUESTED still blocks the skip.
+run_comment_human_approval_test "comment-governance-null-decision-changes-requested-then-commented-blocks" \
+  "${GOVERNANCE_COMMENT_JSON}" \
+  "--add-label requires-manual-review" "log" "false" \
+  'MOCK_REVIEWS_JSON=[{"state":"APPROVED","commit_id":"abc123","user":{"login":"alice","type":"User"},"submitted_at":"2026-01-01T00:00:00Z"},{"state":"CHANGES_REQUESTED","commit_id":"abc123","user":{"login":"alice","type":"User"},"submitted_at":"2026-01-02T00:00:00Z"},{"state":"COMMENTED","commit_id":"abc123","user":{"login":"alice","type":"User"},"submitted_at":"2026-01-03T00:00:00Z"}]' \
+  "MOCK_COLLABORATOR_ROLE=write"
+
+# reviewDecision is null; reviewer A (dave) approved HEAD but reviewer B
+# (carol) has an outstanding CHANGES_REQUESTED whose only later review is
+# COMMENTED — the skip must still not fire even though a qualifying
+# APPROVED row exists from a different reviewer.
+run_comment_human_approval_test "comment-governance-null-decision-approved-plus-stale-comment-blocks" \
+  "${GOVERNANCE_COMMENT_JSON}" \
+  "--add-label requires-manual-review" "log" "false" \
+  'MOCK_REVIEWS_JSON=[{"state":"APPROVED","commit_id":"abc123","user":{"login":"dave","type":"User"},"submitted_at":"2026-01-01T00:00:00Z"},{"state":"CHANGES_REQUESTED","commit_id":"abc123","user":{"login":"carol","type":"User"},"submitted_at":"2026-01-01T00:00:00Z"},{"state":"COMMENTED","commit_id":"abc123","user":{"login":"carol","type":"User"},"submitted_at":"2026-01-02T00:00:00Z"}]' \
+  "MOCK_COLLABORATOR_ROLE=write"
+
 # ---------------------------------------------------------------------------
 # GitLab: skip requires-manual-review for native comment + governance finding
 # ---------------------------------------------------------------------------
@@ -2469,6 +2497,17 @@ run_gitlab_comment_human_approval_test "gitlab-comment-governance-stale-approval
   "MOCK_MR_APPROVALS_JSON=${GITLAB_APPROVED_JSON}" \
   "MOCK_MR_ACCESS_LEVEL=40" \
   "MOCK_MR_VERSION_CREATED_AT=2024-12-01T00:00:00.000Z"
+
+# TOCTOU: HEAD SHA moved during Gate 3's own window (versions call, notes
+# pagination, member lookup) — after the Gate-2 TOCTOU re-fetch succeeded
+# but before returning success. The final re-check must catch this and
+# still fail closed rather than trusting the earlier snapshot.
+run_gitlab_comment_human_approval_test "gitlab-comment-governance-gate3-toctou-sha-changed" \
+  "${GITLAB_GOVERNANCE_COMMENT_JSON}" \
+  "No authorized human approval on current HEAD" \
+  "MOCK_MR_APPROVALS_JSON=${GITLAB_APPROVED_JSON}" \
+  "MOCK_MR_ACCESS_LEVEL=40" \
+  "MOCK_MR_SHA_FINAL_REFETCH=deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
 
 # ---------------------------------------------------------------------------
 # Risk assessment label + comment tests
