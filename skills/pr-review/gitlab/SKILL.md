@@ -125,6 +125,14 @@ target-branch files a rebase incorporated and falsely re-qualifies
 conditional sub-agents (docs-currency, security, intent-coherence,
 cross-repo-contracts).
 
+GitLab omits patch text for binaries and for diffs over the size limit
+(`too_large`/collapsed, typically an empty `diff`), and can also
+truncate the current MR's file list (`overflow` on `mr-changes.json`).
+A modified-but-unenumerable file would otherwise carry the same empty
+signature on both sides and be dropped from the delta, so any of these
+conditions fails closed to `all` rather than silently skipping the
+file.
+
 ```bash
 # Prior MR-vs-base at PRIOR_REVIEW_SHA vs current MR-vs-base. Diff /
 # add-delete flag changes are MR-level; files that only changed on the
@@ -140,10 +148,14 @@ if curl --fail --silent --show-error \
   > /sandbox/workspace/prior-pr-compare.json
 then
   jq -n -r --slurpfile cur /sandbox/workspace/mr-changes.json --slurpfile prior /sandbox/workspace/prior-pr-compare.json '
+    def sig($o): "\($o.diff // "")|\($o.new_file)|\($o.deleted_file)|\($o.too_large // false)|\($o.collapsed // false)";
+    def unenumerable($o): (($o.new_file // false) != true) and (($o.deleted_file // false) != true)
+      and (($o.diff // "") == "" or ($o.too_large // false) or ($o.collapsed // false));
     if ($prior[0].compare_timeout // false)
+       or ($cur[0].overflow // false)
+       or ((($prior[0].diffs // []) + ($cur[0].changes // [])) | any(unenumerable(.)))
     then "all"
     else
-      def sig($o): "\($o.diff // "")|\($o.new_file)|\($o.deleted_file)";
       ($cur[0].changes // [] | map(.new_path) | unique) as $pr
       | (($prior[0].diffs // []) | map({key: .new_path, value: sig(.)}) | from_entries) as $pmap
       | (($cur[0].changes // []) | map({key: .new_path, value: sig(.)}) | from_entries) as $cmap

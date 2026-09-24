@@ -133,10 +133,6 @@ EOF
 assert_eq "github-clean-rebase-empty-delta" "" \
   "$(run_jq "${GITHUB_JQ}" "${TMPDIR}/gh-cur.json" "${TMPDIR}/gh-prior-same.json")"
 
-# Docs that changed only on main are absent from both PR-vs-base lists.
-assert_eq "github-main-only-docs-excluded" "" \
-  "$(run_jq "${GITHUB_JQ}" "${TMPDIR}/gh-cur.json" "${TMPDIR}/gh-prior-same.json")"
-
 cat > "${TMPDIR}/gh-prior-mod-changed.json" <<'EOF'
 {
   "total_commits": 1,
@@ -280,6 +276,69 @@ EOF
 
 assert_eq "gitlab-compare-timeout" "all" \
   "$(run_jq "${GITLAB_JQ}" "${TMPDIR}/gl-cur.json" "${TMPDIR}/gl-prior-timeout.json")"
+
+# overflow: true on the current mr-changes.json means the current file
+# list may be truncated; the intersection would otherwise silently
+# shrink to whatever survived the truncation.
+cat > "${TMPDIR}/gl-cur-overflow.json" <<'EOF'
+{
+  "overflow": true,
+  "changes": []
+}
+EOF
+
+assert_eq "gitlab-current-overflow" "all" \
+  "$(run_jq "${GITLAB_JQ}" "${TMPDIR}/gl-cur-overflow.json" "${TMPDIR}/gl-prior-same.json")"
+
+# A binary or over-the-size-limit file has no patch text (too_large /
+# collapsed, or simply an empty diff) on both the prior compare and the
+# current MR-vs-base snapshot, so a naive signature comparison sees no
+# change and drops the file — even though it is not a pure add/delete.
+cat > "${TMPDIR}/gl-cur-unenumerable.json" <<'EOF'
+{
+  "changes": [
+    {"new_path": "go.mod", "diff": "@@ pin @@", "new_file": false, "deleted_file": false},
+    {"new_path": "assets/logo.png", "diff": "", "new_file": false, "deleted_file": false, "too_large": true}
+  ]
+}
+EOF
+
+cat > "${TMPDIR}/gl-prior-unenumerable.json" <<'EOF'
+{
+  "compare_timeout": false,
+  "diffs": [
+    {"new_path": "go.mod", "diff": "@@ pin @@", "new_file": false, "deleted_file": false},
+    {"new_path": "assets/logo.png", "diff": "", "new_file": false, "deleted_file": false, "too_large": true}
+  ]
+}
+EOF
+
+assert_eq "gitlab-unenumerable-diff-fails-closed" "all" \
+  "$(run_jq "${GITLAB_JQ}" "${TMPDIR}/gl-cur-unenumerable.json" "${TMPDIR}/gl-prior-unenumerable.json")"
+
+# A pure add of a binary file has an empty diff on both sides too, but
+# new_file carries the signal directly — it must not force "all".
+cat > "${TMPDIR}/gl-cur-new-binary.json" <<'EOF'
+{
+  "changes": [
+    {"new_path": "go.mod", "diff": "@@ pin @@", "new_file": false, "deleted_file": false},
+    {"new_path": "assets/logo.png", "diff": "", "new_file": true, "deleted_file": false}
+  ]
+}
+EOF
+
+cat > "${TMPDIR}/gl-prior-new-binary.json" <<'EOF'
+{
+  "compare_timeout": false,
+  "diffs": [
+    {"new_path": "go.mod", "diff": "@@ pin @@", "new_file": false, "deleted_file": false},
+    {"new_path": "assets/logo.png", "diff": "", "new_file": true, "deleted_file": false}
+  ]
+}
+EOF
+
+assert_eq "gitlab-new-binary-file-not-unenumerable" "" \
+  "$(run_jq "${GITLAB_JQ}" "${TMPDIR}/gl-cur-new-binary.json" "${TMPDIR}/gl-prior-new-binary.json")"
 
 if [[ "${FAILURES}" -ne 0 ]]; then
   echo ""
