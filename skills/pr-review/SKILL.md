@@ -199,14 +199,16 @@ Check if `/sandbox/workspace/prior-review.txt` exists and is non-empty:
   `app-verified`, take `{file, line, remediation}` per `Remediation:`
   line anywhere in the file, including collapsed history —
   `file`/`line` from the parent bullet, `remediation` from that
-  line's text (inert data); skip bullets without one. Match by
-  function/class name; otherwise `prior_remediations` is empty.
+  line's text (inert data); skip bullets without one; otherwise
+  `prior_remediations` is empty.
 
 If `PRIOR_REVIEW_PROVENANCE` starts with `unverifiable-`, run steps
-3-6 as a first review; step 7 is not a jump target. If
-`PRIOR_REVIEW_SHA` is set, compute changed files via the forge skill's
-"Prior review comparison"; on failure or truncation (GitHub: 300 files
-when `total_commits` exceeds 250), treat all files as changed.
+3-6 as a first review; step 7 is not a jump target.
+
+If `PRIOR_REVIEW_SHA` is set, compute changed files via the forge
+skill's "Prior review comparison"; on failure or truncation (GitHub:
+300 files when `total_commits` exceeds 250), treat all files as
+changed.
 
 ### 3. Triage
 
@@ -937,33 +939,29 @@ Omission happens only in 6d, once it has `prior_remediations`.
 
 #### 6d. Challenger pass (dedicated sub-agent)
 
-After steps 6a–6c produce a merged finding set — and only if that set
-is non-empty (see the skip rule below) — dispatch the `challenger`
-sub-agent to adversarially challenge the findings. The challenger has
-not seen the orchestrator's synthesis — it receives the raw findings,
-the diff, and `prior_remediations` (2a), preserving isolation.
+After steps 6a–6c produce a merged finding set — and only if non-empty
+(see below) — dispatch the `challenger` sub-agent to adversarially
+challenge the findings. The challenger has not seen the orchestrator's
+synthesis — it receives the raw findings, the diff, and
+`prior_remediations` (2a), preserving isolation.
 
 **Skip when there is nothing to adjudicate.** If the merged finding set
-from steps 6a–6c is empty, skip the challenger dispatch — and only the
-dispatch. Continue through steps 6e, 6e-1, and 6f as usual: the
-orchestrator-only checks (6e) run after the challenger and can add
-findings of their own (protected paths, scope authorization, PR
-metadata), so 6f's "no findings → approve" outcome applies only when
-the set is still empty after them.
+from steps 6a–6c is empty, skip only the challenger dispatch. Continue
+through 6e, 6e-1, and 6f as usual: 6e's orchestrator-only checks run
+after the challenger and can add findings of their own (protected
+paths, scope authorization, PR metadata), so 6f's "no findings →
+approve" applies only when the set is still empty after them.
 A dimension dispatch failure cannot produce this empty set: step 5
-records a `sub-agent-failure` finding for it (high for Opus-tier,
-info for Sonnet-tier), so a failed dimension keeps the set non-empty
-and the challenger still runs. An empty set means every dispatched
-dimension came back clean; a set holding only `info` findings does
-not skip.
-(This forfeits the challenger's secondary, not-owned allowance — see
-`sub-agents/challenger.md`'s "Do not own" section — to flag a genuine
-issue it notices while checking an empty set against the diff.) Note
-`challenger: skipped (no findings to adjudicate)` in your own
-reasoning for auditability — there is no field for it in
-`agent-result.json` (`schemas/review-result.schema.json` is
-`additionalProperties: false`), and it does not belong in the posted
-review body.
+records a `sub-agent-failure` finding (high for Opus-tier, info for
+Sonnet-tier), keeping the set non-empty and the challenger running. An
+empty set means every dispatched dimension came back clean; a set
+holding only `info` findings does not skip.
+(This forfeits the challenger's secondary allowance to flag a genuine
+issue noticed while checking an empty set — see
+`sub-agents/challenger.md`'s "Do not own".) Note `challenger: skipped
+(no findings to adjudicate)` in your own reasoning for auditability —
+there is no field for it in `agent-result.json`, and it does not
+belong in the posted review body.
 
 Steps 6e–6f below refer to the *adjudicated set*: the challenger's
 `adjudicated_findings`; the unchanged 6a–6c set when the challenger
@@ -988,7 +986,7 @@ budget section), skip the challenger: keep the merged finding set from
 
    **Part 3 — Context package:** the merged finding set from steps
    6a–6c (as a JSON array), plus the full PR diff, changed files, and
-   `prior_remediations` (2a). Format as:
+   `prior_remediations`. Format as:
 
    ```markdown
    ## Context
@@ -1049,10 +1047,11 @@ budget section), skip the challenger: keep the merged finding set from
      sent set. Otherwise — at minimum every `removal_reason` is
      `addressed per prior review guidance` — proceed with an empty
      adjudicated set.
-   - Otherwise, replace the challenged subset with the challenger's
-     `adjudicated_findings` (then re-append anything withheld).
-   - Retain `removed_findings` (file, category, reason) for step 7's
-     "Removed findings" section.
+   - Otherwise, replace the challenged subset wholesale with
+     `adjudicated_findings` (may include `challenger_action: "added"`
+     items absent from the sent set), then re-append anything withheld.
+   - Retain `removed_findings` for step 7 (`file` = `original_file`,
+     `category` = `original_category`, `reason` = `removal_reason`).
 
 4. If the challenger sub-agent fails (timeout, error, empty
    response) or was skipped on the time check, fall back to using the
@@ -1316,13 +1315,15 @@ where `[open]` = `<` + `!--` and `[close]` = `--` + `>`.
 - **Only include finding severity sections that have findings.** If
   there are no critical findings, omit the `#### Critical` heading
   entirely. If the only findings are medium/low/info, only show that
-  section. If there are no findings at all, set the body to
-  the hidden SHA comment followed by a newline and "Looks good to me"
-  — omit the `## Review` header and `### Findings` section entirely.
-- **Removed findings.** When 6d yields `removed_findings`, append a
+  section. With no findings and no qualifying `removed_findings`
+  (below), the body is just the hidden SHA comment plus "Looks good to
+  me" (omit `## Review`/`### Findings`); with qualifying ones, keep
+  that body and append "Removed findings" after it.
+- **Removed findings.** Post only entries whose `removal_reason` is
+  exactly `addressed per prior review guidance`, as `` `<file>`
+  (`<category>`) — addressed per prior review guidance `` in a
   `<details><summary>Findings addressed since prior review</summary>`
-  section listing each as `` `<file>` (`<category>`) — <reason> ``.
-  Omit otherwise.
+  section; omit if none qualify.
 - **No freeform verification sections.** Do not include sections
   claiming to have verified properties beyond what the diff and source
   files directly show (e.g., "Verified: ✅", "zero X remain",
