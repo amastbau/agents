@@ -655,13 +655,22 @@ if [[ "\${URL}" == *"/members/all/"* ]]; then
   exit 0
 fi
 
-# GET /repository/commits/:sha → commit metadata (HEAD push timestamp)
-if [[ "\${URL}" == *"/repository/commits/"* ]]; then
-  if [[ -n "\${MOCK_MR_COMMIT_FAIL:-}" ]]; then
-    echo "mock curl commit failure" >&2
+# GET /merge_requests/:iid/versions → diff versions. Used to bind the
+# authorized-human-approval override to GitLab's own record of when the
+# current HEAD SHA became the MR's HEAD, instead of the commit's
+# committer date (not push-ordered).
+if [[ "\${URL}" == *"/merge_requests/"* ]] && [[ "\${URL}" == *"/versions"* ]]; then
+  if [[ -n "\${MOCK_MR_VERSIONS_FAIL:-}" ]]; then
+    echo "mock curl versions failure" >&2
     exit 1
   fi
-  echo "\${MOCK_MR_COMMIT_JSON:-{\"committed_date\":\"2024-01-01T00:00:00.000Z\"}}"
+  if [[ -n "\${MOCK_MR_VERSIONS_JSON:-}" ]]; then
+    echo "\${MOCK_MR_VERSIONS_JSON}"
+  else
+    SHA="\${MOCK_MR_SHA:-abc123}"
+    CREATED_AT="\${MOCK_MR_VERSION_CREATED_AT:-2024-01-01T00:00:00.000Z}"
+    printf '[{"head_commit_sha":"%s","created_at":"%s"}]\n' "\${SHA}" "\${CREATED_AT}"
+  fi
   exit 0
 fi
 
@@ -684,7 +693,7 @@ fi
 # up front, then twice more inside forge_has_authorized_human_approval (the
 # initial read and the TOCTOU re-fetch) — a call counter lets the mock
 # simulate the HEAD SHA moving between those last two reads.
-if [[ "\${URL}" == *"/merge_requests/"* ]] && [[ "\${URL}" != *"/notes"* ]] && [[ "\${URL}" != *"/changes"* ]] && [[ "\${URL}" != *"/labels"* ]] && [[ "\${URL}" != *"/approvals"* ]]; then
+if [[ "\${URL}" == *"/merge_requests/"* ]] && [[ "\${URL}" != *"/notes"* ]] && [[ "\${URL}" != *"/changes"* ]] && [[ "\${URL}" != *"/labels"* ]] && [[ "\${URL}" != *"/approvals"* ]] && [[ "\${URL}" != *"/versions"* ]]; then
   COUNT_FILE=".gitlab-mr-fetch-count"
   MR_FETCH_COUNT=0
   [[ -f "\${COUNT_FILE}" ]] && MR_FETCH_COUNT="\$(cat "\${COUNT_FILE}")"
@@ -2330,12 +2339,47 @@ run_gitlab_human_approval_test "gitlab-human-approval-api-fail-closed" \
 # MR-level approved_by flag misses when a project disables
 # reset_approvals_on_push: approved=true and approved_by persist across
 # pushes, but the human never saw this commit. Analogous to GitHub's
-# human-approval-stale-sha-manual-review.
+# human-approval-stale-sha-manual-review. The MR version whose
+# head_commit_sha matches current HEAD — GitLab's own record of when this
+# SHA became MR HEAD — was created after the approval note, i.e. the human
+# approved, then the branch was pushed again. This must fail closed even
+# though the underlying commit object's own committer date (git metadata,
+# not push-ordered) could still claim an earlier timestamp than the
+# approval — that committer-date gap is exactly what the prior fail-open
+# bug relied on; gate 3 no longer reads it at all.
 run_gitlab_human_approval_test "gitlab-human-approval-stale-approval-manual-review" \
   "No authorized human approval on current HEAD" \
   "MOCK_MR_APPROVALS_JSON=${GITLAB_APPROVED_JSON}" \
   "MOCK_MR_ACCESS_LEVEL=40" \
-  "MOCK_MR_COMMIT_JSON={\"committed_date\":\"2024-12-01T00:00:00.000Z\"}"
+  "MOCK_MR_VERSION_CREATED_AT=2024-12-01T00:00:00.000Z"
+
+# No diff version's head_commit_sha matches current HEAD → fail closed
+run_gitlab_human_approval_test "gitlab-human-approval-no-matching-version-manual-review" \
+  "No authorized human approval on current HEAD" \
+  "MOCK_MR_APPROVALS_JSON=${GITLAB_APPROVED_JSON}" \
+  "MOCK_MR_ACCESS_LEVEL=40" \
+  'MOCK_MR_VERSIONS_JSON=[{"head_commit_sha":"deadbeef","created_at":"2024-01-01T00:00:00.000Z"}]'
+
+# Versions API failure → fail closed (not fail open)
+run_gitlab_human_approval_test "gitlab-human-approval-versions-api-fail-closed" \
+  "No authorized human approval on current HEAD" \
+  "MOCK_MR_APPROVALS_JSON=${GITLAB_APPROVED_JSON}" \
+  "MOCK_MR_ACCESS_LEVEL=40" \
+  "MOCK_MR_VERSIONS_FAIL=1"
+
+# Happy path with non-"Z" offset timestamps (with and without milliseconds),
+# matching GitLab's documented Commit/Note timestamp format. Guards against
+# the normalization only ever being exercised by the mock's default
+# "...000Z" fixtures — real GitLab responses can use an offset form like
+# "+00:00" that the old `sub("\\.[0-9]+Z$"; "Z")` normalization silently
+# failed to parse (fromdateiso8601 requires literal "Z"), so the approval
+# override would never fire against a real API despite passing this suite.
+run_gitlab_human_approval_test "gitlab-human-approval-offset-timestamps-ready-for-merge" \
+  "Protected-path requirement satisfied by authorized human approval" \
+  "MOCK_MR_APPROVALS_JSON=${GITLAB_APPROVED_JSON}" \
+  "MOCK_MR_ACCESS_LEVEL=40" \
+  "MOCK_MR_VERSION_CREATED_AT=2024-01-01T00:00:00+00:00" \
+  'MOCK_MR_NOTES_JSON=[{"system":true,"body":"approved this merge request","author":{"username":"alice"},"created_at":"2024-06-01T02:00:00.500+02:00"}]'
 
 # PR author approving their own MR does not count
 run_gitlab_human_approval_test "gitlab-human-approval-self-approve-manual-review" \
