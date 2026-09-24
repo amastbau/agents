@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # GENERATED from validate-code-output.src.sh — DO NOT EDIT. Run: make script-build
-# validate-code-output.src.sh — Validate code/fix agent output: schema + pre-commit.
+# validate-code-output.src.sh — Validate code/fix agent output: schema +
+# finding coverage (fix) + pre-commit.
 #
 # Wraps validate-output-schema.sh's schema check with an additional pre-commit
 # gate run against TARGET_REPO_DIR.  Used as the validation_loop.script for the
 # code and fix harnesses so that a lint or type-check failure consumes a retry
 # iteration (with feedback) instead of ending the run terminally in the
-# post-script.
+# post-script. For the fix agent, also checks that every structured finding
+# tag in REVIEW_BODY_FILE is covered by an actions[].finding value.
 #
 # The pre-commit check runs on the runner (not in the sandbox), so it has
 # full network access and the repo's pre-commit tool dependencies are already
@@ -19,6 +21,7 @@
 #   FULLSEND_OUTPUT_FILE   — filename to validate (default: agent-result.json)
 #   TARGET_REPO_DIR        — path to the target repo (empty on sweep path)
 #   TARGET_BRANCH          — branch the PR targets (for merge-base derivation)
+#   REVIEW_BODY_FILE       — raw review body (fix agent; finding-coverage check)
 #
 # Category gating:
 #   pre-commit-blocked — agent-fixable; consumes a retry iteration
@@ -1007,6 +1010,32 @@ except ValidationError as e:
 " "${RESULT_FILE}" "${FULLSEND_OUTPUT_SCHEMA}"; then
   exit 1
 fi
+
+# ============================================================================
+# Part 1.5: Fix-agent finding coverage (fix-result schema only)
+# ============================================================================
+# Counts `- **[category]**` bullets in the raw review body and requires each
+# occurrence to appear as `[category]` in some actions[].finding. Runs against
+# the review payload the agent received, not the agent's restated summary.
+# Skip when the schema is not fix-result, REVIEW_BODY_FILE is unset/missing,
+# or the body has no structured findings (empty human /fs-fix eval path).
+_schema_base="$(basename "${FULLSEND_OUTPUT_SCHEMA}")"
+case "${_schema_base}" in
+  fix-result.schema.json)
+    _coverage_py="${BASH_SOURCE[0]%/*}/review-finding-coverage.py"
+    if [ -z "${REVIEW_BODY_FILE:-}" ]; then
+      echo "REVIEW_BODY_FILE unset — skipping finding coverage"
+    elif [ ! -f "${REVIEW_BODY_FILE}" ]; then
+      echo "REVIEW_BODY_FILE not a file — skipping finding coverage"
+    elif [ ! -f "${_coverage_py}" ]; then
+      echo "FAIL: review-finding-coverage.py not found at ${_coverage_py}"
+      exit 1
+    else
+      python3 "${_coverage_py}" "${RESULT_FILE}" "${REVIEW_BODY_FILE}" || exit 1
+    fi
+    ;;
+esac
+unset _schema_base _coverage_py
 
 # ============================================================================
 # Part 2: Pre-commit gate against TARGET_REPO_DIR

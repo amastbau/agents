@@ -23,6 +23,7 @@ else
 fi
 
 SCHEMA="${SCRIPT_DIR}/../schemas/code-result.schema.json"
+FIX_SCHEMA="${SCRIPT_DIR}/../schemas/fix-result.schema.json"
 FAILURES=0
 
 TMPDIR="$(mktemp -d)"
@@ -132,6 +133,106 @@ run_test_no_output_dir() {
 }
 
 run_test_no_output_dir "missing-output-dir" "output directory not found"
+
+# ---------------------------------------------------------------------------
+# Part 1.5: Fix-agent finding coverage against REVIEW_BODY_FILE
+# ---------------------------------------------------------------------------
+
+FIX_RESULT_COVERED='{"pr_number":42,"summary":"s","trigger_source":"bot","iteration":1,"tests_passed":true,"actions":[{"type":"fix","finding":"[stale-docs] AGENTS.md:97","description":"Updated wording"},{"type":"disagree","finding":"[protected-path] AGENTS.md","reason":"Governance flag; human approval required"}],"files_changed":["AGENTS.md"]}'
+FIX_RESULT_DROPPED='{"pr_number":42,"summary":"s","trigger_source":"human","iteration":1,"tests_passed":true,"actions":[{"type":"disagree","finding":"the only finding is a procedural protected-path flag","reason":"Governance file"}],"files_changed":[]}'
+TWO_FINDINGS_BODY='## Review
+
+### Findings
+
+#### Medium
+
+- **[stale-docs]** `AGENTS.md:97` — old collection-registration language.
+- **[protected-path]** `AGENTS.md` — protected governance file.
+'
+
+run_test_finding_coverage() {
+  local test_name="$1"
+  local json_content="$2"
+  local review_body="$3"
+  local schema="$4"
+  local expect_pass="$5"
+  local expect_output="${6:-}"
+  local set_review_body_file="${7:-true}"
+
+  local test_dir="${TMPDIR}/${test_name}"
+  mkdir -p "${test_dir}/output"
+  echo "${json_content}" > "${test_dir}/output/agent-result.json"
+  local body_file="${test_dir}/review-body.txt"
+  printf '%s' "${review_body}" > "${body_file}"
+
+  local exit_code=0
+  if [ "${set_review_body_file}" = "true" ]; then
+    FULLSEND_OUTPUT_SCHEMA="${schema}" REVIEW_BODY_FILE="${body_file}" \
+      bash -c "cd '${test_dir}' && bash '${VALIDATOR}'" > "${TMPDIR}/stdout.log" 2>&1 || exit_code=$?
+  else
+    FULLSEND_OUTPUT_SCHEMA="${schema}" \
+      bash -c "cd '${test_dir}' && bash '${VALIDATOR}'" > "${TMPDIR}/stdout.log" 2>&1 || exit_code=$?
+  fi
+
+  local passed=true
+  if [ "${expect_pass}" = "true" ] && [ "${exit_code}" -ne 0 ]; then
+    echo "FAIL: ${test_name} — expected PASS but got exit ${exit_code}"
+    head -20 "${TMPDIR}/stdout.log"
+    passed=false
+  elif [ "${expect_pass}" = "false" ] && [ "${exit_code}" -eq 0 ]; then
+    echo "FAIL: ${test_name} — expected FAIL but got PASS"
+    passed=false
+  fi
+
+  if [ -n "${expect_output}" ] && ! grep -qF "${expect_output}" "${TMPDIR}/stdout.log"; then
+    echo "FAIL: ${test_name} — expected output to contain: ${expect_output}"
+    echo "  actual output:"
+    head -20 "${TMPDIR}/stdout.log"
+    passed=false
+  fi
+
+  if [ "${passed}" = "true" ]; then
+    echo "PASS: ${test_name}"
+  else
+    FAILURES=$((FAILURES + 1))
+  fi
+}
+
+run_test_finding_coverage "coverage-two-findings-covered" \
+  "${FIX_RESULT_COVERED}" \
+  "${TWO_FINDINGS_BODY}" \
+  "${FIX_SCHEMA}" \
+  "true" \
+  "all 2 review findings covered"
+
+run_test_finding_coverage "coverage-dropped-finding-fails" \
+  "${FIX_RESULT_DROPPED}" \
+  "${TWO_FINDINGS_BODY}" \
+  "${FIX_SCHEMA}" \
+  "false" \
+  "[stale-docs] x1"
+
+run_test_finding_coverage "coverage-empty-body-skips" \
+  "${FIX_RESULT_DROPPED}" \
+  "" \
+  "${FIX_SCHEMA}" \
+  "true" \
+  "review body empty"
+
+run_test_finding_coverage "coverage-unset-review-body-skips" \
+  "${FIX_RESULT_DROPPED}" \
+  "${TWO_FINDINGS_BODY}" \
+  "${FIX_SCHEMA}" \
+  "true" \
+  "REVIEW_BODY_FILE unset" \
+  "false"
+
+run_test_finding_coverage "coverage-code-schema-skips" \
+  '{"target_branch":"main"}' \
+  "${TWO_FINDINGS_BODY}" \
+  "${SCHEMA}" \
+  "true" \
+  "PASS: output validated against schema"
 
 # ---------------------------------------------------------------------------
 # Part 2: Pre-commit gate — empty TARGET_REPO_DIR soft-passes
