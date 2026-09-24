@@ -2352,6 +2352,35 @@ run_comment_human_approval_test "comment-governance-toctou-sha-changed" \
   "MOCK_COLLABORATOR_ROLE=write" \
   "MOCK_PR_HEAD_SHA_REFETCH=deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
 
+# reviewDecision is null (e.g. no required-review branch protection
+# configured, per fullsend-ai/fullsend#5522) but a qualifying human
+# APPROVED review exists on HEAD → skip still fires. MOCK_REVIEW_DECISION
+# is intentionally omitted so the mock returns reviewDecision:null.
+run_comment_human_approval_test "comment-governance-null-decision-human-approval-skips-label" \
+  "${GOVERNANCE_COMMENT_JSON}" \
+  "--add-label requires-manual-review" "log" "true" \
+  "MOCK_REVIEWS_JSON=${HUMAN_APPROVAL_REVIEWS}" \
+  "MOCK_COLLABORATOR_ROLE=write"
+
+# reviewDecision is null and one reviewer's latest review is
+# CHANGES_REQUESTED → still requires-manual-review even though no human
+# review's own state is stale (fails closed since reviewDecision can't be
+# trusted to reflect this when null).
+run_comment_human_approval_test "comment-governance-null-decision-changes-requested-blocks" \
+  "${GOVERNANCE_COMMENT_JSON}" \
+  "--add-label requires-manual-review" "log" "false" \
+  'MOCK_REVIEWS_JSON=[{"state":"CHANGES_REQUESTED","commit_id":"abc123","user":{"login":"carol","type":"User"},"submitted_at":"2026-01-01T00:00:00Z"},{"state":"APPROVED","commit_id":"abc123","user":{"login":"alice","type":"User"},"submitted_at":"2026-01-02T00:00:00Z"}]' \
+  "MOCK_COLLABORATOR_ROLE=write"
+
+# reviewDecision is null and a reviewer's CHANGES_REQUESTED was later
+# superseded by their own APPROVED review → only the latest review per
+# reviewer counts, so the skip still fires.
+run_comment_human_approval_test "comment-governance-null-decision-stale-changes-requested-skips-label" \
+  "${GOVERNANCE_COMMENT_JSON}" \
+  "--add-label requires-manual-review" "log" "true" \
+  'MOCK_REVIEWS_JSON=[{"state":"CHANGES_REQUESTED","commit_id":"abc123","user":{"login":"alice","type":"User"},"submitted_at":"2026-01-01T00:00:00Z"},{"state":"APPROVED","commit_id":"abc123","user":{"login":"alice","type":"User"},"submitted_at":"2026-01-02T00:00:00Z"}]' \
+  "MOCK_COLLABORATOR_ROLE=write"
+
 # ---------------------------------------------------------------------------
 # GitLab: skip requires-manual-review for native comment + governance finding
 # ---------------------------------------------------------------------------

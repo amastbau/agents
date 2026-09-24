@@ -200,8 +200,17 @@ forge_list_repo_labels() {
 # 1 otherwise. Fail-closed on any API error or incomplete signal.
 #
 # Two independent gates, both required (lessons from PR #305):
-#   1. GitHub's reviewDecision is APPROVED — handles latest-per-reviewer,
-#      outstanding CHANGES_REQUESTED, CODEOWNERS, and required reviews.
+#   1. GitHub's reviewDecision does not indicate an outstanding block.
+#      reviewDecision is only ever CHANGES_REQUESTED, REVIEW_REQUIRED,
+#      APPROVED, or null — it is null whenever the base branch has no
+#      required-review branch-protection rule configured, regardless of
+#      how many humans have approved. Null/empty is therefore treated as
+#      "no required-review protection configured", not as rejection, and
+#      falls through to Gate 2. CHANGES_REQUESTED and REVIEW_REQUIRED
+#      still fail closed unconditionally. Because a null reviewDecision
+#      can't be relied on to reflect an outstanding CHANGES_REQUESTED
+#      review, Gate 2 additionally scans each reviewer's latest review
+#      itself and fails closed if any is blocking.
 #   2. At least one APPROVED review on the current HEAD SHA comes from a
 #      non-bot, non-author User with write/maintain/admin permission.
 #      author_association is not used: MEMBER does not imply write access
@@ -217,13 +226,28 @@ forge_has_authorized_human_approval() {
   head_sha=$(printf '%s' "${pr_json}" | jq -r '.headRefOid // empty') || return 1
   author_login=$(printf '%s' "${pr_json}" | jq -r '.author.login // empty') || return 1
 
-  if [[ "${review_decision}" != "APPROVED" || -z "${head_sha}" ]]; then
-    return 1
-  fi
+  [[ -n "${head_sha}" ]] || return 1
+
+  case "${review_decision}" in
+    CHANGES_REQUESTED|REVIEW_REQUIRED)
+      return 1
+      ;;
+  esac
 
   local reviews
   reviews=$(GH_TOKEN="${REVIEW_TOKEN}" gh api \
     "repos/${REPO}/pulls/${PR_NUMBER}/reviews" --paginate 2>/dev/null) || return 1
+
+  local blocking_count
+  blocking_count=$(printf '%s' "${reviews}" | jq -r -s '
+    add // []
+    | map(select(.user != null and (.user.login // "") != ""))
+    | group_by(.user.login)
+    | map(max_by(.submitted_at // ""))
+    | map(select(.state == "CHANGES_REQUESTED"))
+    | length
+  ') || return 1
+  [[ "${blocking_count}" == "0" ]] || return 1
 
   local candidates
   candidates=$(printf '%s' "${reviews}" | jq -r -s --arg sha "${head_sha}" --arg author "${author_login}" '
