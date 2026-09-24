@@ -1352,6 +1352,15 @@ run_test "split-creates-allowed-cross-repo-issue" \
   '{"action":"split","reasoning":"spans repos","sub_issues":[{"title":"Local fix","body":"Fix here."},{"repo":"allowed-org/allowed-repo","title":"Upstream fix","body":"Fix upstream."}],"comment":"Split across repos."}' \
   "gh issue create --repo allowed-org/allowed-repo --title Upstream fix --body Fix upstream."
 
+# Cross-repo split: triage dispatch must mutate the already-allowlisted
+# target repo, not a repo re-derived by parsing the created-issue URL
+# (the mock always returns a fixed mock-org/mock-repo URL regardless of
+# --repo, so this fails if dispatch trusts that parse instead of the
+# allowlisted target).
+run_test "split-dispatches-triage-to-target-repo-not-parsed-url" \
+  '{"action":"split","reasoning":"spans repos","sub_issues":[{"title":"Local fix","body":"Fix here."},{"repo":"allowed-org/allowed-repo","title":"Upstream fix","body":"Fix upstream."}],"comment":"Split across repos."}' \
+  "gh api repos/allowed-org/allowed-repo/issues/999/labels -f labels[]=ready-for-triage --silent"
+
 # Cross-repo split: sub-issue targeting a disallowed repo should be skipped.
 run_test_stdout "split-skips-disallowed-cross-repo-issue" \
   '{"action":"split","reasoning":"spans repos","sub_issues":[{"title":"Local fix","body":"Fix here."},{"repo":"disallowed-org/other-repo","title":"Remote fix","body":"Fix remote."}],"comment":"Split across repos."}' \
@@ -1365,22 +1374,24 @@ run_test "split-defaults-to-source-repo" \
 # --- Split triage dispatch tests (#1123) ---
 
 # Verify triage dispatch is issued for each created sub-issue via
-# the ready-for-triage label on the created issue URL.
+# the ready-for-triage label on the created issue URL, applied against
+# the allowlisted target repo (test-org/test-repo — the sub-issue has no
+# repo field, so it defaults to REPO).
 run_test "split-dispatches-triage-for-sub-issues" \
   "${SPLIT_FIXTURE}" \
-  "gh api repos/mock-org/mock-repo/issues/999/labels -f labels[]=ready-for-triage --silent"
+  "gh api repos/test-org/test-repo/issues/999/labels -f labels[]=ready-for-triage --silent"
 
 # Verify the ready-for-triage label is created in the target repo
 # before it is applied (required for cross-repo splits).
 run_test "split-ensures-ready-for-triage-label" \
   "${SPLIT_FIXTURE}" \
-  "gh label create ready-for-triage --repo mock-org/mock-repo"
+  "gh label create ready-for-triage --repo test-org/test-repo"
 
 # Verify triage dispatch is ordered after issue creation.
 run_test_label_order "split-dispatch-after-creation" \
   "${SPLIT_FIXTURE}" \
   "gh issue create --repo test-org/test-repo --title Fix crash on save" \
-  "gh api repos/mock-org/mock-repo/issues/999/labels -f labels[]=ready-for-triage --silent"
+  "gh api repos/test-org/test-repo/issues/999/labels -f labels[]=ready-for-triage --silent"
 
 # Verify dispatch stdout message appears.
 run_test_stdout "split-dispatch-triage-logged" \
@@ -1514,7 +1525,7 @@ else
   fi
 
   # 8. Triage dispatch: ready-for-triage label is added to created sub-issues (#1123).
-  if ! grep -qF "gh api repos/mock-org/mock-repo/issues/999/labels -f labels[]=ready-for-triage --silent" "${GH_LOG}"; then
+  if ! grep -qF "gh api repos/test-org/test-repo/issues/999/labels -f labels[]=ready-for-triage --silent" "${GH_LOG}"; then
     echo "FAIL: ${FUNC_TEST_NAME} — triage dispatch (ready-for-triage label) not applied to sub-issue"
     FUNC_FAILURES=$((FUNC_FAILURES + 1))
   fi

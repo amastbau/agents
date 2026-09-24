@@ -139,11 +139,18 @@ tracker_create_issue() {
 # Apply ready-for-triage to a newly created issue so the dispatch shim
 # picks it up. issues.opened from a workflow-driven create may not start
 # a new run; issues.labeled does. Failures are non-fatal for the caller.
+#
+# target_repo must be the same already-allowlisted repo (checked via
+# is_target_allowed) that created_url's issue was created in. Mutating
+# against target_repo directly — rather than re-deriving the repo by
+# parsing created_url — avoids trusting an unvalidated/unanchored parse
+# of forge-returned text to pick which repo gets a label mutation.
 tracker_dispatch_triage() {
   local created_url="$1"
+  local target_repo="$2"
   local saved_repo="${REPO}"
   local saved_number="${ISSUE_NUMBER}"
-  REPO=$(echo "${created_url}" | sed 's|https://github.com/||; s|/issues/.*||')
+  REPO="${target_repo}"
   ISSUE_NUMBER=$(basename "${created_url}")
   # Ensure the label exists in the target repo (needed for cross-repo splits).
   tracker_create_label "ready-for-triage" "Triggers triage agent dispatch" "0E8A16"

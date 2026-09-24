@@ -556,8 +556,8 @@ ${SUB_BODY}
 
       # Queue the sub-issue for triage. A dispatch failure must not
       # prevent other sub-issues from being created or dispatched (#1123).
-      echo "Dispatching triage for sub-issue: ${CREATED_URL}"
-      if ! tracker_dispatch_triage "${CREATED_URL}"; then
+      echo "Dispatching triage for sub-issue: $(_gha_sanitize "${CREATED_URL}")"
+      if ! tracker_dispatch_triage "${CREATED_URL}" "${TARGET_REPO}"; then
         FAILED_DISPATCHES="${FAILED_DISPATCHES}
 - ${CREATED_URL}"
       fi
