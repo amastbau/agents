@@ -195,10 +195,11 @@ Check if `/sandbox/workspace/prior-review.txt` exists and is non-empty:
 - **Absent or empty:** This is a first review — skip to step 3.
 - **Present:** Read the **current section** (content before
   `<details><summary>Previous run</summary>`) for prior findings and
-  severities, and `{file, line, remediation}` per `Remediation:` line
-  (including nested history) — `file`/`line` from the parent bullet,
-  `remediation` from that line's text; skip bullets without one.
-  Match by function/class name.
+  severities. Separately, take `{file, line, remediation}` per
+  `Remediation:` line anywhere in the file, including collapsed
+  history — `file`/`line` from the parent bullet, `remediation` from
+  that line's text; skip bullets without one. Match by function/class
+  name.
 
 If `PRIOR_REVIEW_PROVENANCE` starts with `unverifiable-`, run steps
 3-6 as a first review; step 7 is not a jump target. If
@@ -935,15 +936,15 @@ location."
 keep both** — they serve different remediation audiences. A logic error
 and an auth bypass on the same line are two distinct findings.
 
-No omission happens here — see 6d.
+Omission happens only in 6d, once it has `prior_remediations`.
 
 #### 6d. Challenger pass (dedicated sub-agent)
 
 After steps 6a–6c produce a merged finding set — and only if that set
 is non-empty (see the skip rule below) — dispatch the `challenger`
-sub-agent to adversarially challenge the findings with fresh context.
-The challenger has not seen the orchestrator's synthesis — it receives
-only the raw findings and the diff, preserving context isolation.
+sub-agent to adversarially challenge the findings. The challenger has
+not seen the orchestrator's synthesis — it receives the raw findings,
+the diff, and (re-reviews) `prior_remediations`, preserving isolation.
 
 **Skip when there is nothing to adjudicate.** If the merged finding set
 from steps 6a–6c is empty, skip the challenger dispatch — and only the
@@ -956,18 +957,13 @@ A dimension dispatch failure cannot produce this empty set: step 5
 records a `sub-agent-failure` finding for it (high for Opus-tier,
 info for Sonnet-tier), so a failed dimension keeps the set non-empty
 and the challenger still runs. An empty set means every dispatched
-dimension came back clean, and the challenger's job is to adjudicate
-findings it is given, not manufacture them from nothing. This rule
-exists for determinism: it codifies the skip the orchestrator already
-makes on clean runs, so the choice is no longer a per-run judgment
-call. Whether a set holding only `info` findings should skip as well is
-an open question; as written it does not.
-(This does forfeit the challenger's secondary, not-owned allowance —
-see `sub-agents/challenger.md`'s "Do not own" section — to flag a
-genuine issue it happens to notice while checking an empty set against
-the diff. Accepted: on a clean run the orchestrator was already
-forfeiting it.) Note `challenger: skipped (no findings to adjudicate)`
-in your own reasoning for auditability — there is no field for it in
+dimension came back clean; a set holding only `info` findings does
+not skip.
+(This forfeits the challenger's secondary, not-owned allowance — see
+`sub-agents/challenger.md`'s "Do not own" section — to flag a genuine
+issue it notices while checking an empty set against the diff.) Note
+`challenger: skipped (no findings to adjudicate)` in your own
+reasoning for auditability — there is no field for it in
 `agent-result.json` (`schemas/review-result.schema.json` is
 `additionalProperties: false`), and it does not belong in the posted
 review body.
@@ -994,8 +990,8 @@ budget section), skip the challenger: keep the merged finding set from
    are reviewing PR" template, and include everything else verbatim
 
    **Part 3 — Context package:** the merged finding set from steps
-   6a–6c (as a JSON array), plus the full PR diff and changed files
-   list. Format as:
+   6a–6c (as a JSON array), plus the full PR diff, changed files, and
+   (re-reviews) `prior_remediations`. Format as:
 
    ```markdown
    ## Context
@@ -1011,6 +1007,9 @@ budget section), skip the challenger: keep the merged finding set from
 
    ### Changed files
    <file list>
+
+   ### Prior remediations
+   <{file, line, remediation} list, or "none">
 
    ### PR metadata
    <title, body, author, labels, is_draft>
