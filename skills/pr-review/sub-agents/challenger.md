@@ -60,7 +60,12 @@ For each finding:
    `actionable: false` when there is a concrete improvement despite
    accepting the current state (disposition 2); leave a genuine defect
    that mentions existing patterns only as context unchanged
-   (disposition 3).
+   (disposition 3). Never apply this filter to `protected-path`,
+   `sub-agent-failure`, `provenance-warning`, `permission-expansion`,
+   `permission-reduction`, `role-escalation`, `workflow-permission`,
+   or `secret-exposure` findings — leave those unchanged regardless of
+   wording; they are mandated confirmation or process findings that
+   must always be emitted.
 
 ## Output format
 

@@ -1045,11 +1045,11 @@ budget section), skip the challenger: keep the merged finding set from
      (`challenger_action`, `challenger_reason`) before merging into the
      review finding set — these are logged for transparency but are not
      part of the standard finding schema.
-   - If `adjudicated_findings` is empty but input was non-empty,
-     compare `removed_findings`'s count to it: equal means legitimate
-     (e.g., step 6 dropped everything as disposition 1) — proceed.
-     Shorter means parse error or truncation; treat as challenger
-     failure (fall back below).
+   - If `adjudicated_findings` is empty but input was non-empty, check
+     whether `removed_findings` covers every input finding by identity
+     (including merge losers); if not, or if `removed_findings` is
+     missing or unparseable, treat it as a challenger failure (fall
+     back below).
    - Otherwise, replace the challenged subset with the challenger's
      `adjudicated_findings` (then re-append anything withheld).
    - Log any `removed_findings` for transparency but do not include
@@ -1236,8 +1236,8 @@ Apply [self-contradicting-findings.md](references/self-contradicting-findings.md
 
 #### 6f. Determine overall outcome
 
-Merge the reconciled, 6e-2-filtered PR-specific findings (from 6e-1)
-into the adjudicated set (step 6d) and evaluate:
+Merge the reconciled PR-specific findings (from 6e-1) into the
+adjudicated set (step 6d), apply 6e-2, and evaluate:
 
 - Any **critical** or **high** finding → `request-changes`
 - One or more **medium** findings identifying a functional bug

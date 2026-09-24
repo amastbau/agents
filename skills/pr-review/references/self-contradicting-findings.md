@@ -20,14 +20,24 @@ pre-existing, or intentional.
 3. **Genuine defect** that mentions existing patterns only as context
    (without conceding the flagged behavior is fine): leave unchanged.
 
+Linked issue #1051 proposed a third disposition — elevate an
+internally contradictory finding for human review during output
+generation — that this filter does not implement. Disposition 3 above
+is a different, narrower concept: a genuine defect that mentions an
+existing pattern only as context is left unchanged, not escalated.
+This filter intentionally covers two of the issue's three proposed
+dispositions (drop / info-enhancement); it adds no escalation
+mechanism.
+
 Skip `protected-path`, `sub-agent-failure`, `provenance-warning`,
-`permission-expansion`, `permission-reduction`, `role-escalation`, and
-`workflow-permission`. Process findings are not self-contradicting
-analysis; human approval is still required for protected paths. The
-permission/role categories are mandated confirmation findings per
-`sub-agents/security.md` — e.g., a permission reduction reported as
-"info confirming intentionality" must always be emitted, even when it
-concedes the change is acceptable.
+`permission-expansion`, `permission-reduction`, `role-escalation`,
+`workflow-permission`, and `secret-exposure`. Process findings are not
+self-contradicting analysis; human approval is still required for
+protected paths. The permission/role/secret-exposure categories are
+mandated confirmation findings per `sub-agents/security.md` — e.g., a
+permission reduction reported as "info confirming intentionality"
+must always be emitted, even when it concedes the change is
+acceptable.
 
 After disposition, apply `$REVIEW_FINDING_SEVERITY_THRESHOLD`. An
 `info` enhancement below the threshold is omitted from the review
