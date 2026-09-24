@@ -613,9 +613,26 @@ forge_has_authorized_human_approval() {
   # qualifying approval note timestamped at or after that. Fail closed if
   # the call errors, no version matches current HEAD, or its timestamp is
   # unavailable/unparseable.
-  local versions version_epoch
-  versions=$(_gitlab_api GET "/projects/${REPO_ENCODED}/merge_requests/${PR_NUMBER}/versions" 2>/dev/null) || return 1
+  # Paginate versions the same way notes are paginated below: per_page=100,
+  # capped pages, so a matching version on a later page can't be missed by
+  # truncation. Without this, GitLab's default page size (20, unordered by
+  # this request) could hide the newest matching version behind an older
+  # one still on page 1, understating version_epoch and letting a stale
+  # approval satisfy gate 3 (fail-open).
+  local versions="[]" version_page=1 version_max_pages=50
+  while [[ "${version_page}" -le "${version_max_pages}" ]]; do
+    local version_batch version_batch_count
+    version_batch=$(_gitlab_api GET "/projects/${REPO_ENCODED}/merge_requests/${PR_NUMBER}/versions?per_page=100&page=${version_page}" 2>/dev/null) || return 1
+    [[ -n "${version_batch}" ]] || return 1
+    version_batch_count=$(printf '%s' "${version_batch}" | jq 'length') || return 1
+    [[ "${version_batch_count}" =~ ^[0-9]+$ ]] || return 1
+    versions=$(jq -c -n --argjson a "${versions}" --argjson b "${version_batch}" '$a + $b') || return 1
+    [[ "${version_batch_count}" -lt 100 ]] && break
+    version_page=$((version_page + 1))
+  done
   [[ -n "${versions}" ]] || return 1
+
+  local version_epoch
   version_epoch=$(printf '%s' "${versions}" | jq -r --arg sha "${current_sha}" '
     '"${_GITLAB_ISO8601_EPOCH_JQ_DEF}"'
     [.[]? | select(.head_commit_sha == $sha) | (.created_at | iso8601_epoch)]
@@ -656,6 +673,14 @@ forge_has_authorized_human_approval() {
     member=$(_gitlab_api GET "/projects/${REPO_ENCODED}/members/all/${id}" 2>/dev/null) || continue
     access=$(printf '%s' "${member}" | jq -r '.access_level // 0') || continue
     if [[ "${access}" =~ ^[0-9]+$ ]] && [ "${access}" -ge 30 ]; then
+      # Re-fetch SHA one more time immediately before trusting the result,
+      # shrinking the remaining TOCTOU window between the earlier re-fetch
+      # (line ~297) and the versions/notes/member lookups that ran since.
+      local final_sha
+      final_sha=$(_gitlab_api GET "/projects/${REPO_ENCODED}/merge_requests/${PR_NUMBER}" 2>/dev/null \
+        | jq -r '.sha // empty') || return 1
+      [[ -n "${final_sha}" ]] || return 1
+      [[ "${final_sha}" == "${current_sha}" ]] || return 1
       echo "Authorized human approval from ${username} (access_level=${access}) on HEAD ${current_sha}"
       return 0
     fi

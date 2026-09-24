@@ -658,18 +658,30 @@ fi
 # GET /merge_requests/:iid/versions → diff versions. Used to bind the
 # authorized-human-approval override to GitLab's own record of when the
 # current HEAD SHA became the MR's HEAD, instead of the commit's
-# committer date (not push-ordered).
+# committer date (not push-ordered). Page-aware so tests can exercise
+# pagination: MOCK_MR_VERSIONS_JSON_PAGE<N> overrides a specific page;
+# MOCK_MR_VERSIONS_JSON only seeds page 1; unset pages beyond page 1
+# default to an empty array (end of pagination).
 if [[ "\${URL}" == *"/merge_requests/"* ]] && [[ "\${URL}" == *"/versions"* ]]; then
   if [[ -n "\${MOCK_MR_VERSIONS_FAIL:-}" ]]; then
     echo "mock curl versions failure" >&2
     exit 1
   fi
-  if [[ -n "\${MOCK_MR_VERSIONS_JSON:-}" ]]; then
-    echo "\${MOCK_MR_VERSIONS_JSON}"
+  VPAGE=\$(printf '%s' "\${URL}" | sed -nE 's/.*[?&]page=([0-9]+).*/\1/p')
+  [[ -z "\${VPAGE}" ]] && VPAGE=1
+  VPAGE_VAR="MOCK_MR_VERSIONS_JSON_PAGE\${VPAGE}"
+  if [[ -n "\${!VPAGE_VAR:-}" ]]; then
+    echo "\${!VPAGE_VAR}"
+  elif [[ "\${VPAGE}" == "1" ]]; then
+    if [[ -n "\${MOCK_MR_VERSIONS_JSON:-}" ]]; then
+      echo "\${MOCK_MR_VERSIONS_JSON}"
+    else
+      SHA="\${MOCK_MR_SHA:-abc123}"
+      CREATED_AT="\${MOCK_MR_VERSION_CREATED_AT:-2024-01-01T00:00:00.000Z}"
+      printf '[{"head_commit_sha":"%s","created_at":"%s"}]\n' "\${SHA}" "\${CREATED_AT}"
+    fi
   else
-    SHA="\${MOCK_MR_SHA:-abc123}"
-    CREATED_AT="\${MOCK_MR_VERSION_CREATED_AT:-2024-01-01T00:00:00.000Z}"
-    printf '[{"head_commit_sha":"%s","created_at":"%s"}]\n' "\${SHA}" "\${CREATED_AT}"
+    echo '[]'
   fi
   exit 0
 fi
@@ -2366,6 +2378,27 @@ run_gitlab_human_approval_test "gitlab-human-approval-versions-api-fail-closed" 
   "MOCK_MR_APPROVALS_JSON=${GITLAB_APPROVED_JSON}" \
   "MOCK_MR_ACCESS_LEVEL=40" \
   "MOCK_MR_VERSIONS_FAIL=1"
+
+# Versions pagination: an older version matching current HEAD sits on page 1
+# (padded to a full 100-item page so the mock's "page returned < 100 → last
+# page" pagination stop condition doesn't fire early), and a newer version
+# also matching current HEAD only appears on page 2. Without consulting page
+# 2, gate 3's threshold would be the older version's timestamp and the
+# approval note below (dated between the two) would incorrectly satisfy it —
+# the fail-open this pagination fix closes. With both pages consulted,
+# version_epoch is the newer (page 2) timestamp, the note predates it, and
+# the override must fail closed.
+GITLAB_VERSIONS_PAGE1_OLD_MATCH=$(jq -nc '
+  [range(99) | {head_commit_sha: ("filler-" + (. | tostring)), created_at: "2024-02-01T00:00:00.000Z"}]
+  + [{head_commit_sha: "abc123", created_at: "2024-01-01T00:00:00.000Z"}]
+')
+run_gitlab_human_approval_test "gitlab-human-approval-versions-pagination-fail-closed" \
+  "No authorized human approval on current HEAD" \
+  "MOCK_MR_APPROVALS_JSON=${GITLAB_APPROVED_JSON}" \
+  "MOCK_MR_ACCESS_LEVEL=40" \
+  "MOCK_MR_VERSIONS_JSON_PAGE1=${GITLAB_VERSIONS_PAGE1_OLD_MATCH}" \
+  'MOCK_MR_VERSIONS_JSON_PAGE2=[{"head_commit_sha":"abc123","created_at":"2024-07-01T00:00:00.000Z"}]' \
+  'MOCK_MR_NOTES_JSON=[{"system":true,"body":"approved this merge request","author":{"username":"alice"},"created_at":"2024-03-01T00:00:00.000Z"}]'
 
 # Happy path with non-"Z" offset timestamps (with and without milliseconds),
 # matching GitLab's documented Commit/Note timestamp format. Guards against
