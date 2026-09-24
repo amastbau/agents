@@ -111,7 +111,7 @@ forge_create_label() {
     --data-urlencode "description=${description}" \
     --data-urlencode "color=#${color}" >"${err_file}" 2>&1; then
     if ! grep -qE 'error: 409\b' "${err_file}"; then
-      echo "::warning::failed to create/verify ${name} label in ${repo} — issue may not be routed for triage: $(_gha_sanitize "$(cat "${err_file}")")"
+      echo "::warning::failed to create/verify $(_gha_sanitize "${name}") label in $(_gha_sanitize "${repo}") — issue may not be routed for triage: $(_gha_sanitize "$(cat "${err_file}")")"
     fi
   fi
   rm -f "${err_file}"
@@ -154,11 +154,11 @@ forge_verify_issue_label() {
   repo_encoded=$(printf '%s' "${repo}" | jq -sRr @uri)
   response=$(_gitlab_api GET "/projects/${repo_encoded}/issues/${issue_iid}" 2>&1) || rc=$?
   if [[ ${rc} -ne 0 ]]; then
-    echo "::warning::unable to verify ${label} label on $(_gha_sanitize "${issue_url}"): $(_gha_sanitize "${response}")"
+    echo "::warning::unable to verify $(_gha_sanitize "${label}") label on $(_gha_sanitize "${issue_url}"): $(_gha_sanitize "${response}")"
     return 0
   fi
   if ! echo "${response}" | jq -e --arg l "${label}" '.labels | index($l) != null' >/dev/null 2>&1; then
-    echo "::warning::${label} label not applied to $(_gha_sanitize "${issue_url}") — manual triage may be needed"
+    echo "::warning::$(_gha_sanitize "${label}") label not applied to $(_gha_sanitize "${issue_url}") — manual triage may be needed"
   fi
 }
 

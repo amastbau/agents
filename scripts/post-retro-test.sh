@@ -130,6 +130,10 @@ if [[ "${URL}" == *"/labels" ]] && [[ " $* " == *" POST "* || " $* " == *" -X PO
     echo "curl: (22) The requested URL returned error: 403" >&2
     exit 22
   fi
+  if [[ "${CURL_MOCK_LABEL_FAIL:-}" == "409" ]]; then
+    echo "curl: (22) The requested URL returned error: 409" >&2
+    exit 22
+  fi
   echo '{"id": 1, "name": "ready-for-triage"}'
   exit 0
 fi
@@ -1578,6 +1582,20 @@ run_gl_test "gl-label-create-fails-warning" \
 run_gl_test "gl-label-create-fails-issue-created" \
   "${GL_FIXTURE_ONE_PROPOSAL}" \
   "Created:"
+export CURL_MOCK_LABEL_FAIL=""
+
+# GitLab: label already exists (409) → treated as success, no warning,
+# issue still created.
+export CURL_MOCK_LABEL_FAIL="409"
+run_gl_test "gl-label-create-409-issue-created" \
+  "${GL_FIXTURE_ONE_PROPOSAL}" \
+  "Created:"
+if grep -qF "::warning::failed to create/verify ready-for-triage label" "${TMPDIR}/stdout.log"; then
+  echo "FAIL: gl-label-create-409-no-warning — 409 response incorrectly reported as failure"
+  FAILURES=$((FAILURES + 1))
+else
+  echo "PASS: gl-label-create-409-no-warning (no label-create warning on 409)"
+fi
 export CURL_MOCK_LABEL_FAIL=""
 
 # GitLab: label not applied after creation → WARNING logged.
