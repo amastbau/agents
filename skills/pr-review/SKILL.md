@@ -194,23 +194,15 @@ Check if `/sandbox/workspace/prior-review.txt` exists and is non-empty:
 
 - **Absent or empty:** This is a first review — skip to step 3.
 - **Present:** Read the **current section** (content before
-  `<details><summary>Previous run</summary>`) to extract prior findings
-  with their severities.
+  `<details><summary>Previous run</summary>`) for prior findings and
+  severities. Collect `{file, location, suggested_action}` from every
+  `Remediation:` line in the file, including nested history.
 
-If `PRIOR_REVIEW_PROVENANCE` starts with `unverifiable-`, the prior
-review file is empty and this run should proceed as a first review.
-Note the provenance failure as an info-level finding (see step 7).
-
-If `PRIOR_REVIEW_SHA` is non-empty, compute the set of files that
-changed since the prior review using the forge-specific review skill's
-"Prior review comparison" commands. Extract the list of changed file
-paths from the response.
-
-If the compare API fails (e.g., 404 from force-push or history
-rewrite), or if the response indicates a truncated result (e.g.,
-GitHub's compare API silently truncates file lists at 300 files when
-`total_commits` exceeds 250), treat all files as changed — no
-anchoring for this run.
+If `PRIOR_REVIEW_PROVENANCE` starts with `unverifiable-`, treat as a
+first review (step 7). If `PRIOR_REVIEW_SHA` is set, compute changed
+files via the forge skill's "Prior review comparison"; on failure or
+truncation (GitHub: 300 files when `total_commits` exceeds 250), treat
+all files as changed.
 
 ### 3. Triage
 
@@ -647,6 +639,7 @@ For each selected sub-agent, assemble a context package containing:
   in sub-agent findings
 - `changed_files`: list of relative file paths modified
 - `prior_findings`: prior findings for this dimension only (from 3a)
+- `prior_remediations`: all-round remediations from 2a
 - `prior_review_sha`: the SHA of the prior review (from 2a)
 - `changed_since_prior`: file set that changed since prior review
 - `pr_metadata`: title, body, author, labels, draft status
@@ -785,6 +778,9 @@ here):
 
    ### Prior findings (this dimension only)
    <prior findings JSON or "none — first review">
+
+   ### Prior remediations
+   <{file, location, suggested_action} list or "none">
 
    ### Prior review SHA
    <sha or "none">
@@ -936,6 +932,10 @@ location."
 **When Correctness and Security findings cover the same code, ALWAYS
 keep both** — they serve different remediation audiences. A logic error
 and an auth bypass on the same line are two distinct findings.
+
+**Exception — prior remediations:** Omit findings that object to an
+implemented step-2a remediation at the same file/location. Record
+`addressed per prior review guidance`.
 
 #### 6d. Challenger pass (dedicated sub-agent)
 

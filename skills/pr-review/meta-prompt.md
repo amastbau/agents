@@ -40,6 +40,16 @@ function/class name (not line number)
 - If the code is unchanged, preserve the prior severity
 - If the code changed, re-evaluate independently
 
+## Prior-remediation reconciliation (re-reviews only)
+
+When prior remediations are provided, match the current diff against
+each `{file, location, suggested_action}`. If the diff implements
+that suggested_action at the named location, omit a finding against
+the implemented change even under a different category. Record the
+match as `addressed per prior review guidance`. If the match is
+uncertain, evaluate independently. Unrelated findings in the same
+file are unaffected.
+
 ## Constraints
 
 - Read changed files from `/sandbox/workspace/pr-head/` (the PR head), not
