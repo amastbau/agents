@@ -1044,9 +1044,8 @@ budget section), skip the challenger: keep the merged finding set from
      part of the standard finding schema.
    - Empty `adjudicated_findings` is a failure (fall back below) only
      if `removed_findings` is also empty or doesn't cover the full
-     sent set. Otherwise — at minimum every `removal_reason` is
-     `addressed per prior review guidance` — proceed with an empty
-     adjudicated set.
+     sent set. Otherwise, proceed with an empty set regardless of
+     `removal_reason` (that literal filters step 7's audit).
    - Otherwise, replace the challenged subset wholesale with
      `adjudicated_findings` (may include `challenger_action: "added"`
      items absent from the sent set), then re-append anything withheld.
@@ -1318,10 +1317,10 @@ where `[open]` = `<` + `!--` and `[close]` = `--` + `>`.
   section. With no findings and no qualifying `removed_findings`
   (below), the body is just the hidden SHA comment plus "Looks good to
   me" (omit `## Review`/`### Findings`); with qualifying ones, keep
-  that body and append "Removed findings" after it.
-- **Removed findings.** Post only entries whose `removal_reason` is
-  exactly `addressed per prior review guidance`, as `` `<file>`
-  (`<category>`) — addressed per prior review guidance `` in a
+  that body and append **Removed findings** below.
+- **Removed findings.** Post only entries whose `reason` is exactly
+  `addressed per prior review guidance`, as `` `<file>` (`<category>`)
+  — addressed per prior review guidance `` in a
   `<details><summary>Findings addressed since prior review</summary>`
   section; omit if none qualify.
 - **No freeform verification sections.** Do not include sections
@@ -1351,7 +1350,7 @@ The table below lists the **additional** required fields per action:
 
 | Outcome         | Action            | Required fields                                                                               |
 |-----------------|-------------------|-----------------------------------------------------------------------------------------------|
-| approve         | `approve`         | `body`, `head_sha`; set `body` to "Looks good to me" (preceded by the hidden SHA comment) when there are no findings |
+| approve         | `approve`         | `body`, `head_sha`; set `body` to "Looks good to me" (preceded by the hidden SHA comment) when there are no findings, plus qualifying **Removed findings** |
 | request-changes | `request-changes` | `body`, `head_sha`, `findings[]` (also used for actionable findings with non-empty `remediation`) |
 | comment-only    | `comment`         | `body`, `head_sha`                                                                            |
 | failure         | `failure`         | `reason` (body optional)                                                                      |
