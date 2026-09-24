@@ -170,6 +170,7 @@ jobs:
           service_account: ${{ secrets.AGENTS_BT_E2E_GCP_SERVICE_ACCOUNT }}
 
       - name: Resolve pinned fullsend source
+        id: fullsend
         if: steps.changes.outputs.relevant != 'false'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -182,14 +183,34 @@ jobs:
             ref="$version"
           fi
           sha="$(gh api "repos/fullsend-ai/fullsend/commits/${ref}" --jq .sha)"
-          checkout="${RUNNER_TEMP}/fullsend"
-          git clone --filter=blob:none --no-checkout \
-            https://github.com/fullsend-ai/fullsend.git "$checkout"
-          git -C "$checkout" \
-            -c "http.extraheader=AUTHORIZATION: bearer ${GH_TOKEN}" \
-            fetch --depth=1 origin "$sha"
-          git -C "$checkout" checkout --detach "$sha"
-          test "$(git -C "$checkout" rev-parse HEAD)" = "$sha"
+          {
+            echo "sha=${sha}"
+            echo "version=${version}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Resolved fullsend ${version} to ${sha}"
+
+      - name: Checkout pinned fullsend source
+        if: steps.changes.outputs.relevant != 'false'
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: fullsend-ai/fullsend
+          ref: ${{ steps.fullsend.outputs.sha }}
+          path: .behaviour-fullsend
+          # Materialize all files: the wrapper runs from this checkout and
+          # later runtime reads must not need a promisor fetch.
+          fetch-depth: 1
+          persist-credentials: false
+          token: ${{ github.token }}
+
+      - name: Configure pinned fullsend module
+        if: steps.changes.outputs.relevant != 'false'
+        env:
+          FULLSEND_SHA: ${{ steps.fullsend.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          checkout="${GITHUB_WORKSPACE}/.behaviour-fullsend"
+          test "$(git -C "$checkout" rev-parse HEAD)" = "$FULLSEND_SHA"
           grep -qx 'module github.com/fullsend-ai/fullsend' "$checkout/go.mod"
           test -d "$checkout/cmd/fullsend"
           modfile="${RUNNER_TEMP}/agents.mod"
@@ -202,10 +223,10 @@ jobs:
           go mod tidy -modfile="$modfile"
           {
             echo "FULLSEND_CHECKOUT=$checkout"
-            echo "FULLSEND_SHA=$sha"
+            echo "FULLSEND_SHA=$FULLSEND_SHA"
             echo "BEHAVIOUR_GOFLAGS=-modfile=$modfile"
           } >> "$GITHUB_ENV"
-          echo "Using fullsend source ${sha} for ${version}"
+          echo "Using fullsend source ${FULLSEND_SHA} from ${checkout}"
 
       - name: Prepare behaviour config preset
         if: steps.changes.outputs.relevant != 'false'
