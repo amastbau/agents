@@ -298,8 +298,8 @@ complex PR that triggers all conditions legitimately needs all 6.
 **Conditionally included based on classification:**
 
 - `security` — when auth, permissions, secrets, data handling, string
-  literals, config, or metadata are touched; also after 3c-1 when
-  `security_critical_files` is non-empty
+  literals, config, or metadata are touched; also when 3c-1's
+  Dispatch auto-inclusion rule applies
 - `intent-coherence` — when linked issues exist or changes are
   non-trivial
 - `docs-currency` — when the repository has documentation files
@@ -338,8 +338,8 @@ complex PR that triggers all conditions legitimately needs all 6.
      `changed_since_prior` includes files matching their step 3b path
      criteria (auth/permissions/secrets/config/data-handling for
      `security`; public APIs, exported interfaces, schemas, or CLI
-     surface for `cross-repo-contracts`). A non-empty 3c-1
-     `security_critical_files` also qualifies `security`.
+     surface for `cross-repo-contracts`). `security` unconditionally
+     re-qualifies under 3c-1's Dispatch auto-inclusion rule.
 
    If the incremental delta cannot be enumerated — `changed_since_prior`
    is `"all"` (the step 2a fallback for a failed compare, >250 commits,
