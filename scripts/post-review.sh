@@ -522,14 +522,19 @@ forge_list_repo_labels() {
 
 # Parses a GitLab ISO-8601 timestamp (optional fractional seconds, and
 # either a trailing "Z" or a numeric UTC offset such as "+02:00" or
-# "-0700") into epoch seconds. Returns nothing (not even null) when the
-# input is empty, not a string, or does not match — callers must treat a
-# missing result as a parse failure and fail closed.
+# "-0700") into epoch milliseconds. Fractional seconds are captured (not
+# discarded) and truncated to millisecond resolution so two timestamps
+# that differ only within the same UTC second still compare correctly —
+# whole-second truncation previously let an approval note timestamped in
+# the same second as, but milliseconds before, a matching MR version's
+# created_at be treated as covering that version. Returns nothing (not
+# even null) when the input is empty, not a string, or does not match —
+# callers must treat a missing result as a parse failure and fail closed.
 _GITLAB_ISO8601_EPOCH_JQ_DEF='
 def iso8601_epoch:
   if . == null or (length) == 0 then empty
   else
-    ((capture("^(?<base>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(?:\\.[0-9]+)?(?<tz>Z|[+-][0-9]{2}:?[0-9]{2})$")?) // null) as $m
+    ((capture("^(?<base>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(?:\\.(?<frac>[0-9]+))?(?<tz>Z|[+-][0-9]{2}:?[0-9]{2})$")?) // null) as $m
     | if $m == null then empty
       else
         ($m.base + "Z" | fromdateiso8601) as $base
@@ -539,7 +544,8 @@ def iso8601_epoch:
              | (($digits[0:2] | tonumber) * 3600 + ($digits[2:4] | tonumber) * 60) as $mag
              | (if ($m.tz | startswith("-")) then -$mag else $mag end)
            end) as $offset
-        | $base - $offset
+        | ((($m.frac // "0") + "000")[0:3] | tonumber) as $frac_ms
+        | ($base - $offset) * 1000 + $frac_ms
       end
   end;
 '
@@ -619,7 +625,7 @@ forge_has_authorized_human_approval() {
   # this request) could hide the newest matching version behind an older
   # one still on page 1, understating version_epoch and letting a stale
   # approval satisfy gate 3 (fail-open).
-  local versions="[]" version_page=1 version_max_pages=50
+  local versions="[]" version_page=1 version_max_pages=50 version_last_batch_count=-1
   while [[ "${version_page}" -le "${version_max_pages}" ]]; do
     local version_batch version_batch_count
     version_batch=$(_gitlab_api GET "/projects/${REPO_ENCODED}/merge_requests/${PR_NUMBER}/versions?per_page=100&page=${version_page}" 2>/dev/null) || return 1
@@ -627,10 +633,20 @@ forge_has_authorized_human_approval() {
     version_batch_count=$(printf '%s' "${version_batch}" | jq 'length') || return 1
     [[ "${version_batch_count}" =~ ^[0-9]+$ ]] || return 1
     versions=$(jq -c -n --argjson a "${versions}" --argjson b "${version_batch}" '$a + $b') || return 1
+    version_last_batch_count="${version_batch_count}"
     [[ "${version_batch_count}" -lt 100 ]] && break
     version_page=$((version_page + 1))
   done
   [[ -n "${versions}" ]] || return 1
+  # If the loop only stopped because version_max_pages was exhausted — not
+  # because a short (< 100 item) final page ended pagination naturally —
+  # the last fetched page was still full. The version list may be missing
+  # pages beyond the cap, so version_epoch below could understate the true
+  # max(created_at) and let a stale approval satisfy gate 3 (fail-open).
+  # Fail closed instead of trusting a possibly-truncated list.
+  if [[ "${version_page}" -gt "${version_max_pages}" && "${version_last_batch_count}" -eq 100 ]]; then
+    return 1
+  fi
 
   local version_epoch
   version_epoch=$(printf '%s' "${versions}" | jq -r --arg sha "${current_sha}" '

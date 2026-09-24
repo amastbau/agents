@@ -2400,6 +2400,34 @@ run_gitlab_human_approval_test "gitlab-human-approval-versions-pagination-fail-c
   'MOCK_MR_VERSIONS_JSON_PAGE2=[{"head_commit_sha":"abc123","created_at":"2024-07-01T00:00:00.000Z"}]' \
   'MOCK_MR_NOTES_JSON=[{"system":true,"body":"approved this merge request","author":{"username":"alice"},"created_at":"2024-03-01T00:00:00.000Z"}]'
 
+# Versions pagination hits the 50-page cap with the final page still full
+# (100 items) — page 1 has an older version matching current HEAD (reusing
+# the fixture above) and every subsequent page up to the cap is a full,
+# non-matching filler page, so the loop never finds a short final page and
+# exhausts version_max_pages instead. Without detecting that the cap (not a
+# short page) ended pagination, gate 3 would compute version_epoch from the
+# page-1 match alone and the approval note below — dated after it — would
+# incorrectly satisfy the override, even though a newer matching version
+# could exist past page 50. The fix must fail closed whenever the cap is
+# hit with a full last page, regardless of what matched before the cap.
+# Filler pages use bare `null` entries (rather than realistic version
+# objects) purely to keep the accumulated `--argjson` payload well under
+# the ~128KB single-argument exec limit across 49 filler pages — the
+# `.head_commit_sha`/`.created_at` accesses in the gate-3 jq are null-safe
+# for these entries, so they never match `$sha` and cannot mask what
+# page 1's real fixture is exercising.
+GITLAB_VERSIONS_FILLER_PAGE=$(jq -nc '[range(100) | null]')
+GITLAB_VERSIONS_CAP_ARGS=("MOCK_MR_VERSIONS_JSON_PAGE1=${GITLAB_VERSIONS_PAGE1_OLD_MATCH}")
+for gitlab_versions_cap_page in $(seq 2 50); do
+  GITLAB_VERSIONS_CAP_ARGS+=("MOCK_MR_VERSIONS_JSON_PAGE${gitlab_versions_cap_page}=${GITLAB_VERSIONS_FILLER_PAGE}")
+done
+run_gitlab_human_approval_test "gitlab-human-approval-versions-cap-exceeded-fail-closed" \
+  "No authorized human approval on current HEAD" \
+  "MOCK_MR_APPROVALS_JSON=${GITLAB_APPROVED_JSON}" \
+  "MOCK_MR_ACCESS_LEVEL=40" \
+  "${GITLAB_VERSIONS_CAP_ARGS[@]}" \
+  'MOCK_MR_NOTES_JSON=[{"system":true,"body":"approved this merge request","author":{"username":"alice"},"created_at":"2024-03-01T00:00:00.000Z"}]'
+
 # Happy path with non-"Z" offset timestamps (with and without milliseconds),
 # matching GitLab's documented Commit/Note timestamp format. Guards against
 # the normalization only ever being exercised by the mock's default
@@ -2413,6 +2441,23 @@ run_gitlab_human_approval_test "gitlab-human-approval-offset-timestamps-ready-fo
   "MOCK_MR_ACCESS_LEVEL=40" \
   "MOCK_MR_VERSION_CREATED_AT=2024-01-01T00:00:00+00:00" \
   'MOCK_MR_NOTES_JSON=[{"system":true,"body":"approved this merge request","author":{"username":"alice"},"created_at":"2024-06-01T02:00:00.500+02:00"}]'
+
+# Approval note timestamped in the same UTC second as, but milliseconds
+# before, the matching MR version's created_at — the exact stale-approval
+# scenario gate 3 exists to reject (approve, then push in the same second)
+# when reset_approvals_on_push is disabled. Whole-second truncation used to
+# discard the fractional component on both sides, so the note's epoch and
+# the version's epoch floored to the same second and satisfied
+# `approval_epoch >= version_epoch`, incorrectly treating a pre-push
+# approval as covering the post-push HEAD. With millisecond-resolution
+# comparison the note (.100) is strictly before the version (.900) and the
+# override must fail closed.
+run_gitlab_human_approval_test "gitlab-human-approval-subsecond-stale-approval-manual-review" \
+  "No authorized human approval on current HEAD" \
+  "MOCK_MR_APPROVALS_JSON=${GITLAB_APPROVED_JSON}" \
+  "MOCK_MR_ACCESS_LEVEL=40" \
+  "MOCK_MR_VERSION_CREATED_AT=2024-06-01T12:00:00.900Z" \
+  'MOCK_MR_NOTES_JSON=[{"system":true,"body":"approved this merge request","author":{"username":"alice"},"created_at":"2024-06-01T12:00:00.100Z"}]'
 
 # PR author approving their own MR does not count
 run_gitlab_human_approval_test "gitlab-human-approval-self-approve-manual-review" \
