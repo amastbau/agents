@@ -5,6 +5,9 @@ Parses ``- **[category]**`` bullets from the raw review body (not the
 agent's restated summary) and requires each occurrence to appear as
 ``[category]`` in some ``actions[].finding`` value. Extra actions
 (rebase, squash, CI) are allowed in addition to per-finding actions.
+Each action's finding text credits at most one tag — its first ``[tag]``
+token — so one action cannot cover multiple findings by mentioning
+several bracketed tags in prose.
 
 ``<details>`` blocks (prior-iteration recap) and HTML comments are
 stripped before parsing so stale tags cannot inflate the required set.
@@ -54,10 +57,23 @@ def parse_finding_tags(review_body: str) -> list[str]:
     return tags
 
 
+FINDING_TAG_TOKEN = re.compile(r"\[([^\]]+)\]")
+
+
 def tags_in_finding(finding: str, tags: set[str]) -> list[str]:
-    """Return tags whose ``[tag]`` form appears in an action finding label."""
-    text = (finding or "").lower()
-    return [tag for tag in tags if f"[{tag}]" in text]
+    """Return the tag covered by an action finding label, if any.
+
+    Only the *first* ``[tag]`` token in the finding text counts. A finding
+    string that mentions multiple bracketed tags in prose (e.g. "the only
+    real issue is [protected-path]; [stale-docs] is not a real defect")
+    must not be allowed to satisfy more than one required finding from a
+    single action — each finding still needs its own action.
+    """
+    match = FINDING_TAG_TOKEN.search(finding or "")
+    if not match:
+        return []
+    tag = match.group(1).strip().lower()
+    return [tag] if tag in tags else []
 
 
 def coverage(review_body: str, actions: list) -> tuple[Counter, Counter]:

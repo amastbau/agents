@@ -187,6 +187,29 @@ class TestCheckCoverage(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("[protected-path] x1", message)
 
+    def test_two_tags_in_one_finding_still_needs_two_actions(self):
+        """A single finding string embedding two bracketed tags in prose must
+        not be allowed to satisfy both required findings at once — only the
+        first bracketed tag token counts."""
+        actions = [
+            {
+                "type": "disagree",
+                "finding": (
+                    "the only real issue is [protected-path]; "
+                    "[stale-docs] is not a real defect"
+                ),
+            },
+        ]
+        ok, message = check_coverage(TWO_FINDINGS, actions)
+        self.assertFalse(ok)
+        self.assertIn("[stale-docs] x1", message)
+        self.assertIn("covered: [protected-path] x1", message)
+
+        # Recording the second tag as its own action closes the gap.
+        actions.append({"type": "fix", "finding": "[stale-docs] AGENTS.md:97"})
+        ok, message = check_coverage(TWO_FINDINGS, actions)
+        self.assertTrue(ok, message)
+
 
 class TestMainCli(unittest.TestCase):
     def _write(self, directory, name, content):

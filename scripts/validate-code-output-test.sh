@@ -235,6 +235,115 @@ run_test_finding_coverage "coverage-code-schema-skips" \
   "PASS: output validated against schema"
 
 # ---------------------------------------------------------------------------
+# Part 1.6: Pointer-only REVIEW_BODY_FILE (GitHub) must not silently skip
+# ---------------------------------------------------------------------------
+# On GitHub, COMMENT/CHANGES_REQUESTED reviews post the full structured
+# findings as a separate issue comment; REVIEW_BODY_FILE only gets a pointer
+# sentence. Regression coverage for the PR #1296 shape: a pointer-only body
+# alongside a dropped-finding agent-result.json must FAIL, never skip/pass.
+
+POINTER_BODY_1296="See the [review comment](https://github.com/fullsend-ai/agents/pull/1296#issuecomment-5679933789) for full details."
+
+MOCK_GH_BIN="${TMPDIR}/mock-gh-bin"
+mkdir -p "${MOCK_GH_BIN}"
+cat > "${MOCK_GH_BIN}/gh" <<'MOCKEOF'
+#!/usr/bin/env bash
+if [ "$1" = "api" ]; then
+  cat <<'JSON'
+[[{"user":{"login":"fullsend-ai-review[bot]"},"body":"<!-- fullsend:review-agent -->\n## Review\n\n### Findings\n\n#### Medium\n\n- **[stale-docs]** `AGENTS.md:97` — old collection-registration language.\n- **[protected-path]** `AGENTS.md` — protected governance file.\n"}]]
+JSON
+  exit 0
+fi
+exit 1
+MOCKEOF
+chmod +x "${MOCK_GH_BIN}/gh"
+
+run_test_pointer_body() {
+  local test_name="$1"
+  local json_content="$2"
+  local use_mock_gh="$3"   # "true" to put the working gh/jq fixture on PATH
+  local forge="$4"         # value for FULLSEND_FORGE, or "" to leave unset
+  local expect_pass="$5"
+  local expect_output="$6"
+
+  local test_dir="${TMPDIR}/${test_name}"
+  mkdir -p "${test_dir}/output"
+  echo "${json_content}" > "${test_dir}/output/agent-result.json"
+  local body_file="${test_dir}/review-body.txt"
+  printf '%s' "${POINTER_BODY_1296}" > "${body_file}"
+
+  local path_for_test="${PATH}"
+  if [ "${use_mock_gh}" = "true" ]; then
+    path_for_test="${MOCK_GH_BIN}:${PATH}"
+  fi
+
+  local exit_code=0
+  PATH="${path_for_test}" \
+    FULLSEND_OUTPUT_SCHEMA="${FIX_SCHEMA}" \
+    REVIEW_BODY_FILE="${body_file}" \
+    FULLSEND_FORGE="${forge}" \
+    REPO_FULL_NAME="fullsend-ai/agents" \
+    PR_NUMBER="1296" \
+    TRIGGER_SOURCE="fullsend-ai-review[bot]" \
+    PUSH_TOKEN="fake-token" \
+    bash -c "cd '${test_dir}' && bash '${VALIDATOR}'" > "${TMPDIR}/stdout.log" 2>&1 || exit_code=$?
+
+  local passed=true
+  if [ "${expect_pass}" = "true" ] && [ "${exit_code}" -ne 0 ]; then
+    echo "FAIL: ${test_name} — expected PASS but got exit ${exit_code}"
+    head -20 "${TMPDIR}/stdout.log"
+    passed=false
+  elif [ "${expect_pass}" = "false" ] && [ "${exit_code}" -eq 0 ]; then
+    echo "FAIL: ${test_name} — expected FAIL but got PASS"
+    head -20 "${TMPDIR}/stdout.log"
+    passed=false
+  fi
+
+  if [ -n "${expect_output}" ] && ! grep -qF "${expect_output}" "${TMPDIR}/stdout.log"; then
+    echo "FAIL: ${test_name} — expected output to contain: ${expect_output}"
+    echo "  actual output:"
+    head -20 "${TMPDIR}/stdout.log"
+    passed=false
+  fi
+
+  if [ "${passed}" = "true" ]; then
+    echo "PASS: ${test_name}"
+  else
+    FAILURES=$((FAILURES + 1))
+  fi
+}
+
+# No gh/jq fixture and no PR context to resolve against — must fail closed,
+# not fall through to "no structured findings" the way a bare pointer body
+# would if parsed as-is.
+run_test_pointer_body "coverage-pointer-body-unresolved-fails-closed" \
+  "${FIX_RESULT_DROPPED}" \
+  "false" \
+  "" \
+  "false" \
+  "pointer-only"
+
+# gh/jq fixture resolves the pointer to the real findings comment; a fully
+# covered result now passes against the *resolved* findings, not the
+# pointer sentence.
+run_test_pointer_body "coverage-pointer-body-resolved-covered-passes" \
+  "${FIX_RESULT_COVERED}" \
+  "true" \
+  "github" \
+  "true" \
+  "all 2 review findings covered"
+
+# Same resolution, but with the dropped-finding shape from the original
+# conforma/policy#1785 incident — must FAIL, proving the resolved body (not
+# the pointer) drives the coverage check.
+run_test_pointer_body "coverage-pointer-body-resolved-dropped-fails" \
+  "${FIX_RESULT_DROPPED}" \
+  "true" \
+  "github" \
+  "false" \
+  "[stale-docs] x1"
+
+# ---------------------------------------------------------------------------
 # Part 2: Pre-commit gate — empty TARGET_REPO_DIR soft-passes
 # ---------------------------------------------------------------------------
 
