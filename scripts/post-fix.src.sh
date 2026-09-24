@@ -271,17 +271,26 @@ DIFF_BASE="${PRE_AGENT_HEAD:-$(git rev-parse HEAD~1 2>/dev/null || echo HEAD)}"
 # Signed-off-by and gitleaks). Detect this and fall back to merge-base, which
 # isolates only the branch's own commits — the same approach used for
 # BRANCH_CHANGED_FILES below and for SCAN_RANGE in post-code.src.sh.
+#
+# Skip the repair entirely when NO_PUSH is already true (e.g. the PR was
+# merged/closed while the agent was running — issue #1130): gitleaks and
+# pre-commit never run on this path, so there is nothing DIFF_BASE needs to
+# stay accurate for, and failing to resolve a trusted target SHA here must
+# not turn into a hard setup-error that blocks the graceful skip-push +
+# proposed-changes-comment path this combination is meant to take.
 if ! git merge-base --is-ancestor "${DIFF_BASE}" HEAD 2>/dev/null; then
-  if [ "${NO_PUSH}" = "false" ]; then
-    fetch_trusted_target_sha
-  fi
-  _rebase_mb="$(git merge-base HEAD "${TRUSTED_TARGET_SHA}" 2>/dev/null)" || _rebase_mb=""
-  if [ -n "${_rebase_mb}" ]; then
-    echo "PRE_AGENT_HEAD is not an ancestor of HEAD (history rewrite detected) — using merge-base for DIFF_BASE"
-    DIFF_BASE="${_rebase_mb}"
+  if [ "${NO_PUSH}" = "true" ]; then
+    echo "PRE_AGENT_HEAD is not an ancestor of HEAD (history rewrite detected), but NO_PUSH is already true — leaving DIFF_BASE as-is (no scan needs it on this path)"
   else
-    post_fail_to_pr setup-error \
-      "PRE_AGENT_HEAD is not an ancestor of HEAD and merge-base failed — cannot determine safe DIFF_BASE"
+    fetch_trusted_target_sha
+    _rebase_mb="$(git merge-base HEAD "${TRUSTED_TARGET_SHA}" 2>/dev/null)" || _rebase_mb=""
+    if [ -n "${_rebase_mb}" ]; then
+      echo "PRE_AGENT_HEAD is not an ancestor of HEAD (history rewrite detected) — using merge-base for DIFF_BASE"
+      DIFF_BASE="${_rebase_mb}"
+    else
+      post_fail_to_pr setup-error \
+        "PRE_AGENT_HEAD is not an ancestor of HEAD and merge-base failed — cannot determine safe DIFF_BASE"
+    fi
   fi
 fi
 
