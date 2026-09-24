@@ -66,8 +66,16 @@ section_text() {
   local file="$1"
   local start_pattern="$2"
   local end_pattern="$3"
-  awk -v s="${start_pattern}" -v e="${end_pattern}" \
-    '$0 ~ s {flag=1} flag {print} flag && $0 ~ e && $0 !~ s {exit}' \
+  # Pass patterns through ENVIRON rather than -v: POSIX awk runs -v
+  # values through the same escape-sequence processing as string
+  # literals, so a regex like '\*\*' can silently become a literal
+  # '**' (varies by awk build — this is exactly what made
+  # skill-3c-item4-excludes-subagent-failure pass on some awk builds
+  # and fail on others despite identical file content). ENVIRON
+  # entries are taken verbatim, so the pattern reaches the regex
+  # engine unchanged.
+  AWK_SECTION_START="${start_pattern}" AWK_SECTION_END="${end_pattern}" awk \
+    '$0 ~ ENVIRON["AWK_SECTION_START"] {flag=1} flag {print} flag && $0 ~ ENVIRON["AWK_SECTION_END"] && $0 !~ ENVIRON["AWK_SECTION_START"] {exit}' \
     "${file}" | tr '\n' ' ' | tr -s ' '
 }
 
@@ -199,7 +207,13 @@ require_grep "agent-high-severity-opus" "${AGENT}" \
   'high severity for Opus-tier `correctness` and `security`'
 
 require_grep "agent-request-changes-on-gap" "${AGENT}" \
-  'set `action` to `request-changes`'
+  'high-severity finding forces the orchestrator to set `action` to `request-changes`'
+
+require_grep "agent-sonnet-tier-info-severity" "${AGENT}" \
+  'info severity for Sonnet-tier `intent-coherence`, `style-conventions`, `docs-currency`, and `cross-repo-contracts`'
+
+require_grep "agent-info-not-automatic-request-changes" "${AGENT}" \
+  'not automatically `request-changes`'
 
 require_grep "agent-no-single-pass-code-review" "${AGENT}" \
   'Do not fall back to a single-pass `code-review`'
