@@ -480,9 +480,9 @@ incident.
 6. Validate and store the classification result for use in step 3d:
 
    **Failure fallback:** If the security-triage sub-agent fails
-   (timeout, parse error, empty response), fall back to treating
-   **all files as security-critical** — this preserves the existing
-   uniform-attention behavior as a safe default.
+   (timeout, parse error, empty response), leave
+   `security_critical_files` empty and fall back to step 3f's uniform,
+   non-prioritized context preparation as a safe default.
 
    **Structural validation:** Before accepting the classification,
    verify the following invariants against the changed-file set
