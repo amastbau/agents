@@ -240,10 +240,20 @@ forge_has_authorized_human_approval() {
   ') || return 1
   [[ "${blocking_count}" == "0" ]] || return 1
 
+  # Candidates use each reviewer's *effective* review — the same
+  # group_by/max_by pipeline as blocking_count above — so a reviewer's
+  # earlier APPROVED row is not reused once a later review (even a
+  # since-dismissed CHANGES_REQUESTED) has superseded it. Matching only
+  # the raw APPROVED row's own commit_id/state, without regard to
+  # whether it is still that reviewer's latest state, would let a stale
+  # approval authorize the skip after the reviewer's standing changed.
   local candidates
   candidates=$(printf '%s' "${reviews}" | jq -r -s --arg sha "${head_sha}" --arg author "${author_login}" '
     add // []
     | map(select(.user != null and (.user.login // "") != ""))
+    | map(select(.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED"))
+    | group_by(.user.login)
+    | map(max_by(.submitted_at // ""))
     | [.[]
       | select(
           .state == "APPROVED"

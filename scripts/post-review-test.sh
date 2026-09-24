@@ -2409,6 +2409,18 @@ run_comment_human_approval_test "comment-governance-null-decision-approved-plus-
   'MOCK_REVIEWS_JSON=[{"state":"APPROVED","commit_id":"abc123","user":{"login":"dave","type":"User"},"submitted_at":"2026-01-01T00:00:00Z"},{"state":"CHANGES_REQUESTED","commit_id":"abc123","user":{"login":"carol","type":"User"},"submitted_at":"2026-01-01T00:00:00Z"},{"state":"COMMENTED","commit_id":"abc123","user":{"login":"carol","type":"User"},"submitted_at":"2026-01-02T00:00:00Z"}]' \
   "MOCK_COLLABORATOR_ROLE=write"
 
+# reviewDecision is null; a qualifying reviewer (alice) approved HEAD, then
+# had an outstanding CHANGES_REQUESTED that was later dismissed. The latest
+# effective state is DISMISSED (not blocking, so blocking_count is 0), but
+# the earlier APPROVED row must not be reused as a stale authorization since
+# it is no longer that reviewer's effective state. No reviewer currently has
+# a fresh APPROVED effective review, so requires-manual-review still applies.
+run_comment_human_approval_test "comment-governance-null-decision-approved-then-changes-requested-then-dismissed-blocks" \
+  "${GOVERNANCE_COMMENT_JSON}" \
+  "--add-label requires-manual-review" "log" "false" \
+  'MOCK_REVIEWS_JSON=[{"state":"APPROVED","commit_id":"abc123","user":{"login":"alice","type":"User"},"submitted_at":"2026-01-01T00:00:00Z"},{"state":"CHANGES_REQUESTED","commit_id":"abc123","user":{"login":"alice","type":"User"},"submitted_at":"2026-01-02T00:00:00Z"},{"state":"DISMISSED","commit_id":"abc123","user":{"login":"alice","type":"User"},"submitted_at":"2026-01-03T00:00:00Z"}]' \
+  "MOCK_COLLABORATOR_ROLE=write"
+
 # ---------------------------------------------------------------------------
 # GitLab: skip requires-manual-review for native comment + governance finding
 # ---------------------------------------------------------------------------
