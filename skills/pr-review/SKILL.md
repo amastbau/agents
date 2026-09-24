@@ -1194,10 +1194,8 @@ orchestrator findings) for pairs where:
   `.github/**` files")
 
 The most common pattern is a `protected-path` finding (from 6e)
-claiming insufficient authorization while an `implicit-authorization`
-or `missing-authorization` info-level finding (from a sub-agent)
-cites specific configuration (e.g., `renovate.json`, `dependabot.yml`)
-that explicitly authorizes the change pattern.
+claiming insufficient authorization while a sub-agent finding cites
+config (e.g., `renovate.json`) that authorizes the change.
 
 **How to reconcile:** For each orchestrator finding, check whether any
 existing sub-agent finding provides evidence that directly negates its
@@ -1231,6 +1229,10 @@ premise:
   is the sub-agent's responsibility.
 - It does not re-run the challenger pass. Reconciliation operates
   on the final finding set, not on intermediate results.
+
+#### 6e-2. Self-contradicting findings
+
+Apply [self-contradicting-findings.md](references/self-contradicting-findings.md).
 
 #### 6f. Determine overall outcome
 

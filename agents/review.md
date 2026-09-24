@@ -65,6 +65,13 @@ findings to include. The severity order from lowest to highest is:
 Suppress findings below the threshold — do not mention them in the
 review body and do not include them in the `findings` array.
 
+Also suppress findings whose own analysis concludes the flagged
+behavior is acceptable, not a regression, or an established pattern,
+unless they propose a concrete improvement (those become `info`
+`enhancement-opportunity`). Genuine defects that mention existing
+patterns only as context keep their original severity. Applied in
+`pr-review` (after 6e-1) and when `code-review` compiles findings.
+
 This filtering applies to the narrative body text and the structured
 findings equally. If filtering removes all findings from a
 `request-changes` or `reject` verdict, downgrade the verdict to

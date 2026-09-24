@@ -239,10 +239,9 @@ For each issue identified, record:
 
 **Cross-file finding self-check:** Before recording any finding that
 asserts what a specific file contains, verify that you read that file
-during step 2. If you did not read it, read it now before finalizing
-the finding. If the file is unreadable, reframe the finding to state
-that the contents could not be verified — do not assert unverified
-contents as fact.
+during step 2. If you did not, read it now. If unreadable, say so —
+do not assert unverified contents as fact. Do not record a finding
+that says the current code is acceptable or not a regression.
 
 #### Severity anchoring (re-reviews)
 
