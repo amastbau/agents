@@ -265,6 +265,24 @@ EOF
 assert_eq "gitlab-new-file-in-mr" "README.md" \
   "$(run_jq "${GITLAB_JQ}" "${TMPDIR}/gl-cur-new-file.json" "${TMPDIR}/gl-prior-same.json")"
 
+# After a rebase, from=base&to=prior can still list target-only files
+# because the merge-base of the unrebased prior SHA and the new target
+# is the old target. Those files must not survive the intersection
+# with the current MR-vs-base list (mirrors github-rebase-main-files-excluded).
+cat > "${TMPDIR}/gl-prior-with-target.json" <<'EOF'
+{
+  "compare_timeout": false,
+  "diffs": [
+    {"new_path": "go.mod", "diff": "@@ pin @@", "new_file": false, "deleted_file": false},
+    {"new_path": "go.sum", "diff": "@@ sum @@", "new_file": false, "deleted_file": false},
+    {"new_path": "docs/review.md", "diff": "@@ target-only @@", "new_file": false, "deleted_file": false}
+  ]
+}
+EOF
+
+assert_eq "gitlab-rebase-target-files-excluded" "" \
+  "$(run_jq "${GITLAB_JQ}" "${TMPDIR}/gl-cur.json" "${TMPDIR}/gl-prior-with-target.json")"
+
 cat > "${TMPDIR}/gl-prior-timeout.json" <<'EOF'
 {
   "compare_timeout": true,
