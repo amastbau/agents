@@ -404,12 +404,12 @@ tracker_create_issue() {
 # Apply ready-for-triage to a newly created issue so Jira dispatch can
 # pick it up. Failures are non-fatal for the caller.
 tracker_dispatch_triage() {
-  local issue_url="$1"
+  local created_url="$1"
   local saved_number="${ISSUE_NUMBER}"
-  ISSUE_NUMBER=$(echo "${issue_url}" | sed -E 's|.*/browse/||')
+  ISSUE_NUMBER=$(echo "${created_url}" | sed -E 's|.*/browse/||')
   local rc=0
   if ! tracker_add_label "ready-for-triage"; then
-    echo "::warning::Failed to add ready-for-triage label to $(_gha_sanitize "${issue_url}")" >&2
+    echo "::warning::Failed to add ready-for-triage label to $(_gha_sanitize "${created_url}")" >&2
     rc=1
   fi
   ISSUE_NUMBER="${saved_number}"

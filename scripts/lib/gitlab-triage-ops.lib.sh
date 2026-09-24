@@ -301,16 +301,16 @@ tracker_create_issue() {
 # picks it up. Uses _gitlab_api (host-allowlisted) against the project
 # parsed from the created URL. Failures are non-fatal for the caller.
 tracker_dispatch_triage() {
-  local issue_url="$1"
+  local created_url="$1"
   local saved_repo="${REPO}"
   local saved_encoded="${REPO_ENCODED}"
   local saved_number="${ISSUE_NUMBER}"
-  REPO=$(echo "${issue_url}" | sed -E 's|^https://[^/]+/(.+)/-/issues/[0-9]+$|\1|')
+  REPO=$(echo "${created_url}" | sed -E 's|^https://[^/]+/(.+)/-/issues/[0-9]+$|\1|')
   REPO_ENCODED=$(printf '%s' "${REPO}" | jq -sRr @uri)
-  ISSUE_NUMBER=$(basename "${issue_url}")
+  ISSUE_NUMBER=$(basename "${created_url}")
   local rc=0
   if ! tracker_add_label "ready-for-triage"; then
-    echo "::warning::Failed to add ready-for-triage label to $(_gha_sanitize "${issue_url}")" >&2
+    echo "::warning::Failed to add ready-for-triage label to $(_gha_sanitize "${created_url}")" >&2
     rc=1
   fi
   REPO="${saved_repo}"

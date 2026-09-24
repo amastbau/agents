@@ -182,16 +182,16 @@ tracker_create_issue() {
 # picks it up. issues.opened from a workflow-driven create may not start
 # a new run; issues.labeled does. Failures are non-fatal for the caller.
 tracker_dispatch_triage() {
-  local issue_url="$1"
+  local created_url="$1"
   local saved_repo="${REPO}"
   local saved_number="${ISSUE_NUMBER}"
-  REPO=$(echo "${issue_url}" | sed 's|https://github.com/||; s|/issues/.*||')
-  ISSUE_NUMBER=$(basename "${issue_url}")
+  REPO=$(echo "${created_url}" | sed 's|https://github.com/||; s|/issues/.*||')
+  ISSUE_NUMBER=$(basename "${created_url}")
   # Ensure the label exists in the target repo (needed for cross-repo splits).
   tracker_create_label "ready-for-triage" "Triggers triage agent dispatch" "0E8A16"
   local rc=0
   if ! tracker_add_label "ready-for-triage"; then
-    echo "::warning::Failed to add ready-for-triage label to $(_gha_sanitize "${issue_url}")" >&2
+    echo "::warning::Failed to add ready-for-triage label to $(_gha_sanitize "${created_url}")" >&2
     rc=1
   fi
   REPO="${saved_repo}"
@@ -539,16 +539,16 @@ tracker_create_issue() {
 # picks it up. Uses _gitlab_api (host-allowlisted) against the project
 # parsed from the created URL. Failures are non-fatal for the caller.
 tracker_dispatch_triage() {
-  local issue_url="$1"
+  local created_url="$1"
   local saved_repo="${REPO}"
   local saved_encoded="${REPO_ENCODED}"
   local saved_number="${ISSUE_NUMBER}"
-  REPO=$(echo "${issue_url}" | sed -E 's|^https://[^/]+/(.+)/-/issues/[0-9]+$|\1|')
+  REPO=$(echo "${created_url}" | sed -E 's|^https://[^/]+/(.+)/-/issues/[0-9]+$|\1|')
   REPO_ENCODED=$(printf '%s' "${REPO}" | jq -sRr @uri)
-  ISSUE_NUMBER=$(basename "${issue_url}")
+  ISSUE_NUMBER=$(basename "${created_url}")
   local rc=0
   if ! tracker_add_label "ready-for-triage"; then
-    echo "::warning::Failed to add ready-for-triage label to $(_gha_sanitize "${issue_url}")" >&2
+    echo "::warning::Failed to add ready-for-triage label to $(_gha_sanitize "${created_url}")" >&2
     rc=1
   fi
   REPO="${saved_repo}"
@@ -965,12 +965,12 @@ tracker_create_issue() {
 # Apply ready-for-triage to a newly created issue so Jira dispatch can
 # pick it up. Failures are non-fatal for the caller.
 tracker_dispatch_triage() {
-  local issue_url="$1"
+  local created_url="$1"
   local saved_number="${ISSUE_NUMBER}"
-  ISSUE_NUMBER=$(echo "${issue_url}" | sed -E 's|.*/browse/||')
+  ISSUE_NUMBER=$(echo "${created_url}" | sed -E 's|.*/browse/||')
   local rc=0
   if ! tracker_add_label "ready-for-triage"; then
-    echo "::warning::Failed to add ready-for-triage label to $(_gha_sanitize "${issue_url}")" >&2
+    echo "::warning::Failed to add ready-for-triage label to $(_gha_sanitize "${created_url}")" >&2
     rc=1
   fi
   ISSUE_NUMBER="${saved_number}"
