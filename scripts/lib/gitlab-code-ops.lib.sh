@@ -419,6 +419,47 @@ forge_enable_auto_merge() {
 
 # --- Issue operations ---
 
+# forge_count_sub_issues — 1 if the GitLab work item has child items, else 0.
+# Uses the work-item hierarchy widget (GitLab's analogue of GitHub sub-issues).
+# Fail-open: prints 0 on API errors or older GitLab versions without the field.
+forge_count_sub_issues() {
+  local issue_number="${1:-${ISSUE_NUMBER}}"
+  if [[ -z "${GITLAB_HOST:-}" || -z "${REPO_FULL_NAME:-}" || -z "${issue_number}" ]]; then
+    echo 0
+    return 0
+  fi
+  _validate_gitlab_host "${GITLAB_HOST}" || {
+    echo 0
+    return 0
+  }
+  local payload
+  payload="$(jq -n \
+    --arg path "${REPO_FULL_NAME}" \
+    --arg iid "${issue_number}" \
+    --arg query 'query($path: ID!, $iid: String!) { project(fullPath: $path) { workItem(iid: $iid) { widgets { ... on WorkItemWidgetHierarchy { hasChildren } } } } }' \
+    '{query: $query, variables: {path: $path, iid: $iid}}')" || {
+    echo 0
+    return 0
+  }
+  local body
+  body="$(curl --fail --silent --show-error \
+    --connect-timeout 10 --max-time 30 \
+    --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+    --header "Content-Type: application/json" \
+    --data "${payload}" \
+    "https://${GITLAB_HOST}/api/graphql" 2>/dev/null)" || {
+    echo 0
+    return 0
+  }
+  local count
+  count="$(printf '%s' "${body}" | jq -r '[.data.project.workItem.widgets[]? | select(.hasChildren == true)] | if length > 0 then 1 else 0 end' 2>/dev/null || true)"
+  if [[ ! "${count}" =~ ^[0-9]+$ ]]; then
+    echo 0
+    return 0
+  fi
+  echo "${count}"
+}
+
 forge_get_issue_comments() {
   local notes="[]"
   local page=1 max_pages=50
