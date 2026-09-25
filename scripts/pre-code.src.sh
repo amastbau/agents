@@ -166,10 +166,10 @@ echo "No existing human PRs found — proceeding with code agent"
 # tracking issue: implementation belongs on the children, not the parent.
 # /fs-code --force above bypasses this check.
 echo "Checking for sub-issues on issue #${ISSUE_NUMBER}..."
-SUB_ISSUE_COUNT="$(forge_count_sub_issues "${ISSUE_NUMBER}")"
+HAS_SUB_ISSUES="$(forge_has_sub_issues "${ISSUE_NUMBER}")"
 
-if [[ "${SUB_ISSUE_COUNT}" =~ ^[1-9][0-9]*$ ]]; then
-  echo "::notice::Issue #${ISSUE_NUMBER} has ${SUB_ISSUE_COUNT} sub-issue(s) — skipping code agent"
+if [[ "${HAS_SUB_ISSUES}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "::notice::Issue #${ISSUE_NUMBER} has sub-issue(s) — skipping code agent"
 
   SKIP_COMMENT="This issue has sub-issues — skipping automated implementation.
 
@@ -179,9 +179,9 @@ The code agent implements leaf work items. Use the child issues for implementati
 
   forge_post_issue_comment "${SKIP_COMMENT}" || true
 
-  echo "Skipping code agent — issue #${ISSUE_NUMBER} is a tracking issue with ${SUB_ISSUE_COUNT} sub-issue(s)"
+  echo "Skipping code agent — issue #${ISSUE_NUMBER} is a tracking issue with sub-issue(s)"
   prescript_output "skipped" "true"
-  prescript_output "reason" "issue #${ISSUE_NUMBER} has ${SUB_ISSUE_COUNT} sub-issue(s); implement the child issues instead"
+  prescript_output "reason" "issue #${ISSUE_NUMBER} has sub-issue(s); implement the child issues instead"
   exit 0
 fi
 

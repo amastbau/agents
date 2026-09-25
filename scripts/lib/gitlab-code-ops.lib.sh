@@ -419,10 +419,14 @@ forge_enable_auto_merge() {
 
 # --- Issue operations ---
 
-# forge_count_sub_issues — 1 if the GitLab work item has child items, else 0.
+# forge_has_sub_issues — 1 if the GitLab work item has child items, else 0.
 # Uses the work-item hierarchy widget (GitLab's analogue of GitHub sub-issues).
+# This only signals presence, not an exact child count (GitLab's hierarchy
+# widget here exposes hasChildren, not a count) — matches the GitHub
+# implementation's truthy/falsy contract; callers must not display this
+# value as an exact count in shared (forge-agnostic) messages.
 # Fail-open: prints 0 on API errors or older GitLab versions without the field.
-forge_count_sub_issues() {
+forge_has_sub_issues() {
   local issue_number="${1:-${ISSUE_NUMBER}}"
   if [[ -z "${GITLAB_HOST:-}" || -z "${REPO_FULL_NAME:-}" || -z "${issue_number}" ]]; then
     echo 0

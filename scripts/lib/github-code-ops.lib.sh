@@ -229,10 +229,14 @@ forge_enable_auto_merge() {
 
 # --- Issue operations ---
 
-# forge_count_sub_issues — number of GitHub sub-issues (children) of an issue.
-# Prints a non-negative integer. Fail-open: prints 0 on API errors so a
+# forge_has_sub_issues — whether the GitHub issue has sub-issues (children).
+# Prints a non-negative integer that is non-zero iff children exist. GitHub
+# exposes an exact child count, but callers must treat the result as a
+# truthy/falsy signal only — GitLab's implementation of this same contract
+# can only report 0 or 1 — and must not display it as an exact count in
+# shared (forge-agnostic) messages. Fail-open: prints 0 on API errors so a
 # missing sub-issues field (older GHES) does not skip legitimate leaf work.
-forge_count_sub_issues() {
+forge_has_sub_issues() {
   local issue_number="${1:-${ISSUE_NUMBER}}"
   local owner="${REPO_FULL_NAME%%/*}"
   local name="${REPO_FULL_NAME##*/}"

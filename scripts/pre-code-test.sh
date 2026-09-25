@@ -673,7 +673,7 @@ SUB_ISSUES_AND_HUMAN_PR_JSON="$(_gql_wrap_sub '[{"number":99,"url":"https://gith
 # Sub-issues present, no human PRs → skip the code agent.
 run_test_stdout "sub-issues-skip-agent" \
   "${SUB_ISSUES_GQL_JSON}" \
-  "Skipping code agent — issue #42 is a tracking issue with 2 sub-issue(s)" \
+  "Skipping code agent — issue #42 is a tracking issue with sub-issue(s)" \
   0
 
 run_test "sub-issues-posts-comment" \
@@ -683,7 +683,7 @@ run_test "sub-issues-posts-comment" \
 
 run_test_stdout "sub-issues-notice" \
   "${SUB_ISSUES_GQL_JSON}" \
-  "has 2 sub-issue(s)" \
+  "has sub-issue(s)" \
   0
 
 # Explicit totalCount 0 is a leaf issue → proceed.
@@ -728,7 +728,7 @@ run_test_stdout_excludes "force-comment-skips-sub-issues-check" \
 # Protocol: sub-issues skip writes skipped=true with a reason.
 run_test_prescript_output "protocol-skip-on-sub-issues" \
   "${SUB_ISSUES_GQL_JSON}" \
-  "skipped=true${NL}reason=issue #42 has 2 sub-issue(s); implement the child issues instead${NL}" \
+  "skipped=true${NL}reason=issue #42 has sub-issue(s); implement the child issues instead${NL}" \
   0
 
 # Protocol: explicit zero sub-issues → proceed, file stays empty.

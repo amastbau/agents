@@ -294,10 +294,14 @@ forge_enable_auto_merge() {
 
 # --- Issue operations ---
 
-# forge_count_sub_issues — number of GitHub sub-issues (children) of an issue.
-# Prints a non-negative integer. Fail-open: prints 0 on API errors so a
+# forge_has_sub_issues — whether the GitHub issue has sub-issues (children).
+# Prints a non-negative integer that is non-zero iff children exist. GitHub
+# exposes an exact child count, but callers must treat the result as a
+# truthy/falsy signal only — GitLab's implementation of this same contract
+# can only report 0 or 1 — and must not display it as an exact count in
+# shared (forge-agnostic) messages. Fail-open: prints 0 on API errors so a
 # missing sub-issues field (older GHES) does not skip legitimate leaf work.
-forge_count_sub_issues() {
+forge_has_sub_issues() {
   local issue_number="${1:-${ISSUE_NUMBER}}"
   local owner="${REPO_FULL_NAME%%/*}"
   local name="${REPO_FULL_NAME##*/}"
@@ -831,10 +835,14 @@ forge_enable_auto_merge() {
 
 # --- Issue operations ---
 
-# forge_count_sub_issues — 1 if the GitLab work item has child items, else 0.
+# forge_has_sub_issues — 1 if the GitLab work item has child items, else 0.
 # Uses the work-item hierarchy widget (GitLab's analogue of GitHub sub-issues).
+# This only signals presence, not an exact child count (GitLab's hierarchy
+# widget here exposes hasChildren, not a count) — matches the GitHub
+# implementation's truthy/falsy contract; callers must not display this
+# value as an exact count in shared (forge-agnostic) messages.
 # Fail-open: prints 0 on API errors or older GitLab versions without the field.
-forge_count_sub_issues() {
+forge_has_sub_issues() {
   local issue_number="${1:-${ISSUE_NUMBER}}"
   if [[ -z "${GITLAB_HOST:-}" || -z "${REPO_FULL_NAME:-}" || -z "${issue_number}" ]]; then
     echo 0
@@ -1100,10 +1108,10 @@ echo "No existing human PRs found — proceeding with code agent"
 # tracking issue: implementation belongs on the children, not the parent.
 # /fs-code --force above bypasses this check.
 echo "Checking for sub-issues on issue #${ISSUE_NUMBER}..."
-SUB_ISSUE_COUNT="$(forge_count_sub_issues "${ISSUE_NUMBER}")"
+HAS_SUB_ISSUES="$(forge_has_sub_issues "${ISSUE_NUMBER}")"
 
-if [[ "${SUB_ISSUE_COUNT}" =~ ^[1-9][0-9]*$ ]]; then
-  echo "::notice::Issue #${ISSUE_NUMBER} has ${SUB_ISSUE_COUNT} sub-issue(s) — skipping code agent"
+if [[ "${HAS_SUB_ISSUES}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "::notice::Issue #${ISSUE_NUMBER} has sub-issue(s) — skipping code agent"
 
   SKIP_COMMENT="This issue has sub-issues — skipping automated implementation.
 
@@ -1113,9 +1121,9 @@ The code agent implements leaf work items. Use the child issues for implementati
 
   forge_post_issue_comment "${SKIP_COMMENT}" || true
 
-  echo "Skipping code agent — issue #${ISSUE_NUMBER} is a tracking issue with ${SUB_ISSUE_COUNT} sub-issue(s)"
+  echo "Skipping code agent — issue #${ISSUE_NUMBER} is a tracking issue with sub-issue(s)"
   prescript_output "skipped" "true"
-  prescript_output "reason" "issue #${ISSUE_NUMBER} has ${SUB_ISSUE_COUNT} sub-issue(s); implement the child issues instead"
+  prescript_output "reason" "issue #${ISSUE_NUMBER} has sub-issue(s); implement the child issues instead"
   exit 0
 fi
 
